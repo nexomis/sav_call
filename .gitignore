@@ -1,0 +1,6 @@
+/test/genvar/
+/test/test_data
+/test/ref
+/test/*csv
+/build
+/variant_caller
