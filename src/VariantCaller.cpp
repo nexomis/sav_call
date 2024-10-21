@@ -9,8 +9,8 @@
 VariantCaller::VariantCaller()
     : count_read_extremities(false),
       min_qual(0),
-      R1_strand("forward"),
-      R2_strand("reverse"),
+      is_r1_rev(false),
+      is_r2_rev(true),
       min_freq(0.0),
       call_strand("both"),
       min_count(0),
@@ -59,6 +59,9 @@ bool VariantCaller::parse_arguments(int argc, char **argv) {
         {"min-count", required_argument, 0, 0},
         {0, 0, 0, 0}
     };
+
+    std::string R1_strand = "forward";
+    std::string R2_strand = "reverse";
 
     int option_index = 0;
     opterr = 0;  // Suppress getopt error messages
@@ -121,6 +124,17 @@ bool VariantCaller::parse_arguments(int argc, char **argv) {
         return false;
     }
 
+    if (R1_strand == "forward") {
+        is_r1_rev = true;
+    } else {
+        is_r1_rev = false;
+    }
+    if (R2_strand == "forward") {
+        is_r2_rev = true;
+    } else {
+        is_r2_rev = false;
+    }
+
     return true;
 }
 
@@ -168,7 +182,7 @@ void VariantCaller::process_pileup() {
     };
 
     iter = bam_plp_init(fill_func, this);
-    bam_plp_set_maxcnt(iter, 50000);  // Set a reasonable max depth to avoid excessive memory usage
+    bam_plp_set_maxcnt(iter, 50000);  // Set a reasonable max depth to avoid excessive memory usage TODO set as option
 
     int tid;
     int pos;
@@ -193,8 +207,15 @@ void VariantCaller::update_counts(uint32_t tid, hts_pos_t pos, int n_plp, const 
         const bam1_t *b = p->b;
 
         // Skip deletions and reference skips
-        if (p->is_del || p->is_refskip)
+        if (p->is_del || p->is_refskip){
+            counts.depth--;
             continue;
+        }
+
+        if ((p->is_head || p->is_tail) && (!count_read_extremities)){
+            counts.depth--;
+            continue;
+        }
 
         // Get base quality
         uint8_t *q = bam_get_qual(b);
@@ -204,34 +225,17 @@ void VariantCaller::update_counts(uint32_t tid, hts_pos_t pos, int n_plp, const 
         // Get base
         uint8_t *s = bam_get_seq(b);
         int base = bam_seqi(s, p->qpos);
-        char base_char = "=ACMGRSVTWYHKDBN"[base];
+        char base_char = seq_nt16_str[base];
 
         // Determine read labels and strands
         bool read1 = is_read1(b);
-        bool read2 = is_read2(b);
-        bool rev_strand = is_reverse_strand(b);
-
-        std::string read_label_strand = (read1) ? R1_strand : (read2) ? R2_strand : "unknown";
-        std::string read_mapped_strand = rev_strand ? "reverse" : "forward";
-
-        bool is_forward_strand;
-        if (read_label_strand == read_mapped_strand) {
-            // Read labelled strand matches mapped strand
-            if (std::isupper(base_char))
-                is_forward_strand = true;
-            else
-                is_forward_strand = false;
-        } else {
-            // Read labelled strand does not match mapped strand
-            if (std::isupper(base_char))
-                is_forward_strand = false;
-            else
-                is_forward_strand = true;
+        bool is_forward_strand = ! is_reverse_strand(b);
+        
+        if ((read1 && is_r1_rev) || ((!read1) && is_r2_rev)) {
+            is_forward_strand = ! is_forward_strand;
         }
 
-        char base_upper = std::toupper(base_char);
-        char base_lower = std::tolower(base_char);
-        switch (base_upper) {
+        switch (base_char) {
             case 'A':
                 if (is_forward_strand)
                     counts.A_fwd++;
@@ -288,11 +292,11 @@ void VariantCaller::update_counts(uint32_t tid, hts_pos_t pos, int n_plp, const 
             }
 
             // For reverse strand, reverse complement
-            if (rev_strand) {
+            if (!is_forward_strand) {
                 std::string revcomp_seq = "";
                 for (auto it = seq.rbegin(); it != seq.rend(); ++it) {
                     char c = *it;
-                    switch (std::toupper(c)) {
+                   switch (std::toupper(c)) {
                         case 'A': revcomp_seq += 'T'; break;
                         case 'C': revcomp_seq += 'G'; break;
                         case 'G': revcomp_seq += 'C'; break;
@@ -303,12 +307,22 @@ void VariantCaller::update_counts(uint32_t tid, hts_pos_t pos, int n_plp, const 
                 seq = revcomp_seq;
             }
 
+            if (indel_len > 0)
+                seq = "+" + seq;
+            else
+                seq = "-" + seq;
+
             // Update indel counts
             IndelCounts &indel_counts = indel_counts_map[key];
+            if (indel_counts.fwd_counts.find(seq) == indel_counts.fwd_counts.end()) {
+                indel_counts.fwd_counts[seq] = 0;
+                indel_counts.rev_counts[seq] = 0;
+            }
             if (is_forward_strand)
                 indel_counts.fwd_counts[seq]++;
             else
                 indel_counts.rev_counts[seq]++;
+
         }
     }
 }

@@ -23,8 +23,8 @@ private:
     std::string indel_csv_file;
     std::string called_variant_file;
     int min_qual;
-    std::string R1_strand;
-    std::string R2_strand;
+    bool is_r1_rev;
+    bool is_r2_rev;
     std::string bam_input;
     std::string fasta_reference;
     float min_freq;
