@@ -30,6 +30,10 @@ private:
     float min_freq;
     std::string call_strand;
     int min_count;
+    int min_alt_count;
+    bool skip_secondary;
+    bool skip_duplicate;
+    int max_n_pileup;
 
     // Data structures
     faidx_t *fai;
@@ -38,11 +42,12 @@ private:
 
     void process_pileup();
     static int pileup_callback(uint32_t tid, hts_pos_t pos, int n, const bam_pileup1_t *plp, void *data);
-    void update_counts(uint32_t tid, hts_pos_t pos, int n, const bam_pileup1_t *plp);
+    void update_counts(uint32_t tid, int pos, int n, const bam_pileup1_t *plp, std::map<int, std::pair<int, int>>& del_depth);
 
     // Counting structures
     struct BaseCounts {
-        int depth;
+        int depth_fw;
+        int depth_rv;
         int A_fwd, A_rev;
         int T_fwd, T_rev;
         int C_fwd, C_rev;
@@ -59,6 +64,8 @@ private:
     // Helper methods
     bool is_read1(const bam1_t *b);
     bool is_read2(const bam1_t *b);
+    bool is_duplicate(const bam1_t *b);
+    bool is_secondary(const bam1_t *b);
     std::string tid_to_name(int32_t tid);
 
     // Output methods

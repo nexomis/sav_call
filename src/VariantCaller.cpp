@@ -11,9 +11,13 @@ VariantCaller::VariantCaller()
       min_qual(0),
       is_r1_rev(false),
       is_r2_rev(true),
-      min_freq(0.0),
+      min_freq(0.02),
       call_strand("both"),
-      min_count(0),
+      min_count(20),
+      min_alt_count(10),
+      skip_secondary(true),
+      skip_duplicate(true),
+      max_n_pileup(1000000),
       fai(nullptr),
       in(nullptr),
       header(nullptr)
@@ -29,23 +33,29 @@ VariantCaller::~VariantCaller() {
 void VariantCaller::print_usage() {
     std::cout << "Usage: variant_caller [options] --bam <input.bam> --reference <reference.fasta>\n"
               << "Options:\n"
-              << "  --count-read-extremities        Count read extremities (default: false)\n"
-              << "  --base-csv <file>               Output base counts to CSV file\n"
-              << "  --indel-csv <file>              Output indel counts to CSV file\n"
-              << "  --called-variant-csv <file>     Output called variants to CSV file\n"
-              << "  --min-qual <int>                Minimum base quality to count\n"
-              << "  --R1-strand <forward|reverse>   Set R1 strand (default: forward)\n"
-              << "  --R2-strand <forward|reverse>   Set R2 strand (default: reverse)\n"
-              << "  --bam <input.bam>               Input BAM file (required)\n"
-              << "  --reference <reference.fasta>   Reference FASTA file (required)\n"
-              << "  --min-freq <float>              Minimum frequency to call a variant\n"
-              << "  --call-strand <forward|reverse|both>  Strand to apply thresholds (default: both)\n"
-              << "  --min-count <int>               Minimum count to report in outputs\n";
+              << "  --count-read-extremities             Count read extremities (default: false)\n"
+              << "  --keep-duplicate                     Keep duplicate reads (default: false)\n"
+              << "  --keep-secondary                     Keep secondary mapping (default: false)\n"
+              << "  --base-csv <file>                    Output base counts to CSV file\n"
+              << "  --indel-csv <file>                   Output indel counts to CSV file\n"
+              << "  --called-variant-csv <file>          Output called variants to CSV file\n"
+              << "  --min-qual <int>                     Minimum base quality to count (default: 0)\n"
+              << "  --R1-strand <forward|reverse>        Set R1 strand (default: forward)\n"
+              << "  --R2-strand <forward|reverse>        Set R2 strand (default: reverse)\n"
+              << "  --bam <input.bam>                    Input BAM file (required)\n"
+              << "  --reference <reference.fasta>        Reference FASTA file (required)\n"
+              << "  --min-freq <float>                   Minimum frequency to call a variant (default: 0.02)\n"
+              << "  --call-strand <forward|reverse|both> Strand to apply thresholds (default: both)\n"
+              << "  --min-count <int>                    Minimum count to report in outputs (default: 20)\n"
+              << "  --min-alt-count <int>                Minimum alternative counts to call (default: 10)\n"
+              << "  --maw-n-pileup <int>                 Maximum reads in pileup (default: 1000000)\n";
 }
 
 bool VariantCaller::parse_arguments(int argc, char **argv) {
     static struct option long_options[] = {
         {"count-read-extremities", no_argument, 0, 0},
+        {"skip-duplicate", no_argument, 0, 0},
+        {"skip-secondary", no_argument, 0, 0},
         {"base-csv", required_argument, 0, 0},
         {"indel-csv", required_argument, 0, 0},
         {"called-variant-csv", required_argument, 0, 0},
@@ -57,6 +67,7 @@ bool VariantCaller::parse_arguments(int argc, char **argv) {
         {"min-freq", required_argument, 0, 0},
         {"call-strand", required_argument, 0, 0},
         {"min-count", required_argument, 0, 0},
+        {"min-alt-count", required_argument, 0, 0},
         {0, 0, 0, 0}
     };
 
@@ -98,6 +109,14 @@ bool VariantCaller::parse_arguments(int argc, char **argv) {
             call_strand = optarg;
         } else if (opt_name == "min-count") {
             min_count = std::stoi(optarg);
+        } else if (opt_name == "min-alt-count") {
+            min_alt_count = std::stoi(optarg);
+        } else if (opt_name == "max-n-pileup") {
+            max_n_pileup = std::stoi(optarg);
+        } else if (opt_name == "keep-secondary") {
+            skip_secondary = false;
+        } else if (opt_name == "keep-duplicate") {
+            skip_duplicate = false;
         } else {
             std::cerr << "Unknown option: " << opt_name << std::endl;
             return false;
@@ -182,40 +201,51 @@ void VariantCaller::process_pileup() {
     };
 
     iter = bam_plp_init(fill_func, this);
-    bam_plp_set_maxcnt(iter, 50000);  // Set a reasonable max depth to avoid excessive memory usage TODO set as option
+    bam_plp_set_maxcnt(iter, max_n_pileup);
 
     int tid;
     int pos;
     const bam_pileup1_t *plp;
+    std::map<int,std::pair<int,int>> del_depth; // to record depth of deletion
     int n_plp;
 
     while ((plp = bam_plp_auto(iter, &tid, &pos, &n_plp)) != nullptr) {
-        update_counts(tid, pos, n_plp, plp);
+        update_counts(tid, pos, n_plp, plp, del_depth);
     }
 
     bam_plp_destroy(iter);
 }
 
-void VariantCaller::update_counts(uint32_t tid, hts_pos_t pos, int n_plp, const bam_pileup1_t *plp) {
+void VariantCaller::update_counts(uint32_t tid, int pos, int n_plp, const bam_pileup1_t *plp, std::map<int, std::pair<int, int> >& del_depth) {
     std::string chrom = tid_to_name(tid);
     std::string key = chrom + ":" + std::to_string(pos + 1);
     BaseCounts &counts = base_counts_map[key];
-    counts.depth = n_plp;
+
+    counts.depth_fw = 0;
+    counts.depth_rv = 0;
+
+    if (del_depth.find(pos) != del_depth.end()) {
+        counts.depth_fw += del_depth[pos].first;
+        counts.depth_rv += del_depth[pos].second;
+        del_depth.erase(pos);
+    }
 
     for (int i = 0; i < n_plp; ++i) {
         const bam_pileup1_t *p = &plp[i];
         const bam1_t *b = p->b;
 
         // Skip deletions and reference skips
-        if (p->is_del || p->is_refskip){
-            counts.depth--;
+        if (p->is_del || p->is_refskip)
             continue;
-        }
 
-        if ((p->is_head || p->is_tail) && (!count_read_extremities)){
-            counts.depth--;
+        if (is_duplicate(b) && skip_duplicate)
             continue;
-        }
+
+        if (is_secondary(b) && skip_secondary)
+            continue;
+
+        if ((p->is_head || p->is_tail) && (!count_read_extremities))
+            continue;
 
         // Get base quality
         uint8_t *q = bam_get_qual(b);
@@ -233,6 +263,11 @@ void VariantCaller::update_counts(uint32_t tid, hts_pos_t pos, int n_plp, const 
         if ((is_read1(b) && is_r1_rev) || (is_read2(b) && is_r2_rev)) {
             is_forward_strand = ! is_forward_strand;
         }
+
+        if (is_forward_strand)
+            counts.depth_fw++;
+        else
+            counts.depth_rv++;
 
         switch (base_char) {
             case 'A':
@@ -259,13 +294,11 @@ void VariantCaller::update_counts(uint32_t tid, hts_pos_t pos, int n_plp, const 
                 else
                     counts.T_rev++;
                 break;
-            case 'N':
+            default:
                 if (is_forward_strand)
                     counts.N_fwd++;
                 else
                     counts.N_rev++;
-                break;
-            default:
                 break;
         }
 
@@ -287,6 +320,16 @@ void VariantCaller::update_counts(uint32_t tid, hts_pos_t pos, int n_plp, const 
                 if (ref_seq) {
                     seq = std::string(ref_seq, ref_seq + ref_len);
                     free(ref_seq);
+                }
+                for (int i = 0; i < - indel_len; i++) {
+                    int new_pos = pos + i + 1;
+                    if (del_depth.find(new_pos) == del_depth.end()) {
+                        del_depth[new_pos] = std::make_pair(0,0);
+                    }
+                    if (is_forward_strand)
+                        del_depth[new_pos].first++;
+                    else
+                        del_depth[new_pos].second++;
                 }
             }
 
@@ -330,6 +373,14 @@ bool VariantCaller::is_read1(const bam1_t *b) {
     return (b->core.flag & BAM_FREAD1) != 0;
 }
 
+bool VariantCaller::is_duplicate(const bam1_t *b) {
+    return (b->core.flag & BAM_FDUP) != 0;
+}
+
+bool VariantCaller::is_secondary(const bam1_t *b) {
+    return (b->core.flag & BAM_FSECONDARY) != 0;
+}
+
 bool VariantCaller::is_read2(const bam1_t *b) {
     return (b->core.flag & BAM_FREAD2) != 0;
 }
@@ -345,7 +396,7 @@ void VariantCaller::write_base_csv() {
         return;
     }
     // Output header
-    ofs << "region;pos;ref;depth;A;a;T;t;C;c;G;g;N;n\n";
+    ofs << "region;pos;ref;depth;depth_fw;depth_rv;A;a;T;t;C;c;G;g;N;n\n";
 
     for (int tid = 0; tid < header->n_targets; ++tid) {
         const char* chrom_name = header->target_name[tid];
@@ -358,7 +409,9 @@ void VariantCaller::write_base_csv() {
             char ref = (ref_base && ref_len == 1) ? ref_base[0] : 'N';
             if (ref_base) free(ref_base);
 
-            ofs << chrom_name << ';' << pos << ';' << ref << ';' << counts.depth << ';'
+            ofs << chrom_name << ';' << pos << ';' << ref << ';' 
+                << counts.depth_fw + counts.depth_rv << ';'
+                << counts.depth_fw << ';' << counts.depth_rv << ';'
                 << counts.A_fwd << ';' << counts.A_rev << ';'
                 << counts.T_fwd << ';' << counts.T_rev << ';'
                 << counts.C_fwd << ';' << counts.C_rev << ';'
@@ -435,11 +488,9 @@ void VariantCaller::call_variants() {
             char ref = (ref_base && ref_len == 1) ? ref_base[0] : 'N';
             if (ref_base) free(ref_base);
 
-            int total_count_fw = counts.A_fwd + counts.C_fwd + counts.G_fwd + 
-                               counts.T_fwd + counts.N_fwd ;
+            int total_count_fw = counts.depth_fw;
 
-            int total_count_rv = counts.A_rev + counts.C_rev + counts.G_rev + 
-                               counts.T_rev + counts.N_rev ;
+            int total_count_rv = counts.depth_rv;
 
             int total_count = total_count_fw + total_count_rv;
 
