@@ -26,7 +26,7 @@ Options:
   --call-strand <forward|reverse|both> Strand to apply thresholds (default: both)
   --min-count <int>                    Minimum counts to call a variant (default: 20)
   --min-alt-count <int>                Minimum alternative counts to call (default: 10)
-  --maw-n-pileup <int>                 Maximum reads in pileup (default: 1000000)
+  --max-n-pileup <int>                 Maximum reads in pileup (default: 1000000)
 ```
 
 ## Example / test
