@@ -480,8 +480,6 @@ void VariantCaller::call_variants() {
             const std::string key = std::string(chrom_name) + ":" + std::to_string(pos);
             const BaseCounts &counts = base_counts_map[key];
 
-            
-
             // Get reference base
             int ref_len;
             char *ref_base = faidx_fetch_seq(fai, chrom_name, pos - 1, pos - 1, &ref_len);
@@ -537,7 +535,15 @@ void VariantCaller::call_variants() {
                 }
 
                 int alt_count = alt_count_fw + alt_count_rv;
-                if (alt_count == 0)
+
+                bool pass_count = (alt_count < min_alt_count);
+
+                if (call_strand == "forward")
+                    pass_count = (alt_count_fw >= min_alt_count);
+                else if (call_strand == "reverse")
+                    pass_count = (alt_count_rv >= min_alt_count);
+
+                if (! pass_count)
                     continue;
 
                 float freq = 0;
@@ -567,6 +573,54 @@ void VariantCaller::call_variants() {
                     << total_count_fw << ';' << freq_fw << ';'
                     << total_count_rv << ';' << freq_rv << '\n';
             }
+
+            if (indel_counts_map.find(key) != indel_counts_map.end()){
+                const IndelCounts &indel_counts =  indel_counts_map[key];
+                for (const auto &indel_entry : indel_counts.fwd_counts) {
+                    const std::string &alt = indel_entry.first;
+                    int alt_count_fw = indel_entry.second;
+                    int alt_count_rv = indel_counts.rev_counts.count(alt) ? indel_counts.rev_counts.at(alt) : 0;
+                    int alt_count = alt_count_fw + alt_count_rv;
+
+                    bool pass_count = (alt_count < min_alt_count);
+
+                    if (call_strand == "forward")
+                        pass_count = (alt_count_fw >= min_alt_count);
+                    else if (call_strand == "reverse")
+                        pass_count = (alt_count_rv >= min_alt_count);
+
+                    if (! pass_count)
+                        continue;
+
+                    float freq = 0;
+                    float freq_fw = 0;
+                    float freq_rv = 0;
+                    
+                    if (total_count > 0)
+                        freq = static_cast<float>(alt_count) / total_count;
+                    if (total_count_fw > 0)
+                        freq_fw = static_cast<float>(alt_count_fw) / total_count_fw;
+                    if (total_count_rv > 0)
+                        freq_rv = static_cast<float>(alt_count_rv) / total_count_rv;
+
+                    bool pass_freq = (freq >= min_freq);
+
+                    // Apply call_strand filter
+                    if (call_strand == "forward")
+                        pass_freq = (freq_fw >= min_freq);
+                    else if (call_strand == "reverse")
+                        pass_freq = (freq_rv >= min_freq);
+
+                    if (!pass_freq)
+                        continue;
+
+                    ofs << chrom_name << ';' << pos << ';' << ref << ';' << alt << ';'
+                    << total_count << ';' << freq << ';'
+                    << total_count_fw << ';' << freq_fw << ';'
+                    << total_count_rv << ';' << freq_rv << '\n';
+                }
+            }
+
         }
     }
 
