@@ -9,7 +9,7 @@ CXXFLAGS = -Wall -O2
 # Paths
 SRCDIR = src
 BUILDDIR = build
-TARGET = variant_caller
+TARGET = sav_call
 
 # Source files
 SOURCES = $(wildcard $(SRCDIR)/*.cpp)
@@ -19,7 +19,7 @@ OBJECTS = $(patsubst $(SRCDIR)/%.cpp,$(BUILDDIR)/%.o,$(SOURCES))
 INCLUDES = -I$(SRCDIR)
 
 # Libraries
-LIBS = -lhts -lz -lbz2 -llzma -lcurl -lpthread
+LIBS = -lhts
 
 # HTSlib paths (adjust if necessary)
 HTSLIB_INC = /usr/local/include

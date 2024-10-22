@@ -25,11 +25,11 @@ mv genvar/batch2 test_data
 rm -rf genvar
 
 for spl in P0 P1 P2 P3; do
-    ../variant_caller --base-csv ${spl}.base.csv --indel-csv ${spl}.indel.csv --bam test_data/${spl}.abra2.bam --reference ref/refseq.fa --called-variant-csv ${spl}.call.csv --count-read-extremities --call-strand forward
+    ../sav_call --base-csv ${spl}.base.csv --indel-csv ${spl}.indel.csv --bam test_data/${spl}.abra2.bam --reference ref/refseq.fa --called-variant-csv ${spl}.call.csv --count-read-extremities --call-strand forward
     python check_results.py test_data/${spl}.indel.csv test_data/${spl}.snp.csv ${spl}.call.csv ref/refseq.fa
 done
 
 for spl in P0 P1 P2 P3; do
-    ../variant_caller --base-csv ${spl}.base.csv --indel-csv ${spl}.indel.csv --bam test_data/${spl}.abra2.bam --reference ref/refseq.fa --called-variant-csv ${spl}.call.csv --count-read-extremities --R1-strand reverse --R2-strand forward --call-strand reverse
+    ../sav_call --base-csv ${spl}.base.csv --indel-csv ${spl}.indel.csv --bam test_data/${spl}.abra2.bam --reference ref/refseq.fa --called-variant-csv ${spl}.call.csv --count-read-extremities --R1-strand reverse --R2-strand forward --call-strand reverse
     python check_results.py test_data/${spl}.indel.csv test_data/${spl}.snp.csv ${spl}.call.csv ref/refseq.fa
 done
