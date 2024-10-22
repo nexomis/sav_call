@@ -59,13 +59,13 @@ private:
     // Helper methods
     bool is_read1(const bam1_t *b);
     bool is_read2(const bam1_t *b);
-    bool is_reverse_strand(const bam1_t *b);
     std::string tid_to_name(int32_t tid);
 
     // Output methods
     void write_base_csv();
     void write_indel_csv();
     void call_variants();
+
 };
 
 #endif // VARIANT_CALLER_H

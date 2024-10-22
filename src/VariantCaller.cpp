@@ -125,14 +125,14 @@ bool VariantCaller::parse_arguments(int argc, char **argv) {
     }
 
     if (R1_strand == "forward") {
-        is_r1_rev = true;
-    } else {
         is_r1_rev = false;
+    } else {
+        is_r1_rev = true;
     }
     if (R2_strand == "forward") {
-        is_r2_rev = true;
-    } else {
         is_r2_rev = false;
+    } else {
+        is_r2_rev = true;
     }
 
     return true;
@@ -228,10 +228,9 @@ void VariantCaller::update_counts(uint32_t tid, hts_pos_t pos, int n_plp, const 
         char base_char = seq_nt16_str[base];
 
         // Determine read labels and strands
-        bool read1 = is_read1(b);
-        bool is_forward_strand = ! is_reverse_strand(b);
+        bool is_forward_strand = ! bam_is_rev(b);
         
-        if ((read1 && is_r1_rev) || ((!read1) && is_r2_rev)) {
+        if ((is_read1(b) && is_r1_rev) || (is_read2(b) && is_r2_rev)) {
             is_forward_strand = ! is_forward_strand;
         }
 
@@ -335,10 +334,6 @@ bool VariantCaller::is_read2(const bam1_t *b) {
     return (b->core.flag & BAM_FREAD2) != 0;
 }
 
-bool VariantCaller::is_reverse_strand(const bam1_t *b) {
-    return (b->core.flag & BAM_FREVERSE) != 0;
-}
-
 std::string VariantCaller::tid_to_name(int32_t tid) {
     return std::string(header->target_name[tid]);
 }
@@ -349,29 +344,21 @@ void VariantCaller::write_base_csv() {
         std::cerr << "Error opening base CSV file for writing: " << base_csv_file << std::endl;
         return;
     }
-
     // Output header
     ofs << "region;pos;ref;depth;A;a;T;t;C;c;G;g;N;n\n";
 
-    for (const auto &entry : base_counts_map) {
-        const std::string &key = entry.first;
-        const BaseCounts &counts = entry.second;
-        // Split key into chrom and pos
-        size_t delim_pos = key.find(':');
-        std::string chrom = key.substr(0, delim_pos);
-        int position = std::stoi(key.substr(delim_pos + 1));
+    for (int tid = 0; tid < header->n_targets; ++tid) {
+        const char* chrom_name = header->target_name[tid];
+        int64_t chrom_length = header->target_len[tid];
+        for (int64_t pos = 0; pos < chrom_length; ++pos) {
+            const std::string key = std::string(chrom_name) + ":" + std::to_string(pos);
+            const BaseCounts &counts = base_counts_map[key];
+            int ref_len;
+            char *ref_base = faidx_fetch_seq(fai, chrom_name, pos - 1, pos - 1, &ref_len);
+            char ref = (ref_base && ref_len == 1) ? ref_base[0] : 'N';
+            if (ref_base) free(ref_base);
 
-        // Get reference base
-        int ref_len;
-        char *ref_base = faidx_fetch_seq(fai, chrom.c_str(), position - 1, position - 1, &ref_len);
-        char ref = (ref_base && ref_len == 1) ? ref_base[0] : 'N';
-        if (ref_base) free(ref_base);
-
-        // Output counts if minimum counts are met
-        if (counts.A_fwd + counts.A_rev + counts.C_fwd + counts.C_rev +
-            counts.G_fwd + counts.G_rev + counts.T_fwd + counts.T_rev +
-            counts.N_fwd + counts.N_rev >= min_count) {
-            ofs << chrom << ';' << position << ';' << ref << ';' << counts.depth << ';'
+            ofs << chrom_name << ';' << pos << ';' << ref << ';' << counts.depth << ';'
                 << counts.A_fwd << ';' << counts.A_rev << ';'
                 << counts.T_fwd << ';' << counts.T_rev << ';'
                 << counts.C_fwd << ';' << counts.C_rev << ';'
@@ -433,84 +420,105 @@ void VariantCaller::call_variants() {
     // Output header
     ofs << "region;pos;ref;alt;depth;freq;depth_fw;freq_fw;depth_rv;freq_rv\n";
 
-    for (const auto &entry : base_counts_map) {
-        const std::string &key = entry.first;
-        const BaseCounts &counts = entry.second;
-        // Split key into chrom and pos
-        size_t delim_pos = key.find(':');
-        std::string chrom = key.substr(0, delim_pos);
-        int position = std::stoi(key.substr(delim_pos + 1));
+    for (int tid = 0; tid < header->n_targets; ++tid) {
+        const char* chrom_name = header->target_name[tid];
+        int64_t chrom_length = header->target_len[tid];
+        for (int64_t pos = 0; pos < chrom_length; ++pos) {
+            const std::string key = std::string(chrom_name) + ":" + std::to_string(pos);
+            const BaseCounts &counts = base_counts_map[key];
 
-        // Get reference base
-        int ref_len;
-        char *ref_base = faidx_fetch_seq(fai, chrom.c_str(), position - 1, position - 1, &ref_len);
-        char ref = (ref_base && ref_len == 1) ? ref_base[0] : 'N';
-        if (ref_base) free(ref_base);
+            
 
-        int total_count = counts.A_fwd + counts.A_rev + counts.C_fwd + counts.C_rev +
-                          counts.G_fwd + counts.G_rev + counts.T_fwd + counts.T_rev +
-                          counts.N_fwd + counts.N_rev;
+            // Get reference base
+            int ref_len;
+            char *ref_base = faidx_fetch_seq(fai, chrom_name, pos - 1, pos - 1, &ref_len);
+            char ref = (ref_base && ref_len == 1) ? ref_base[0] : 'N';
+            if (ref_base) free(ref_base);
 
-        // Skip if total count is less than min_count
-        if (total_count < min_count)
-            continue;
+            int total_count_fw = counts.A_fwd + counts.C_fwd + counts.G_fwd + 
+                               counts.T_fwd + counts.N_fwd ;
 
-        // For each possible alt base
-        char bases[] = {'A', 'C', 'G', 'T', 'N'};
-        for (char alt_base : bases) {
-            if (alt_base == std::toupper(ref))
-                continue;  // Skip reference base
+            int total_count_rv = counts.A_rev + counts.C_rev + counts.G_rev + 
+                               counts.T_rev + counts.N_rev ;
 
-            int alt_count_fw = 0, alt_count_rv = 0;
+            int total_count = total_count_fw + total_count_rv;
 
-            switch (alt_base) {
-                case 'A':
-                    alt_count_fw = counts.A_fwd;
-                    alt_count_rv = counts.A_rev;
-                    break;
-                case 'C':
-                    alt_count_fw = counts.C_fwd;
-                    alt_count_rv = counts.C_rev;
-                    break;
-                case 'G':
-                    alt_count_fw = counts.G_fwd;
-                    alt_count_rv = counts.G_rev;
-                    break;
-                case 'T':
-                    alt_count_fw = counts.T_fwd;
-                    alt_count_rv = counts.T_rev;
-                    break;
-                case 'N':
-                    alt_count_fw = counts.N_fwd;
-                    alt_count_rv = counts.N_rev;
-                    break;
+            if (call_strand == "forward") {
+                if (total_count_fw < min_count)
+                    continue;
+            } else if (call_strand == "reverse") {
+                if (total_count_rv < min_count)
+                    continue;
+            } else {
+                if (total_count < min_count)
+                    continue;
             }
 
-            int alt_count = alt_count_fw + alt_count_rv;
-            if (alt_count == 0)
-                continue;
+            // For each possible alt base
+            char bases[] = {'A', 'C', 'G', 'T', 'N'};
+            for (char alt_base : bases) {
+                if (alt_base == std::toupper(ref))
+                    continue;  // Skip reference base
 
-            float freq = static_cast<float>(alt_count) / total_count;
-            float freq_fw = static_cast<float>(alt_count_fw) / total_count;
-            float freq_rv = static_cast<float>(alt_count_rv) / total_count;
+                int alt_count_fw = 0, alt_count_rv = 0;
 
-            bool pass_freq = (freq >= min_freq);
+                switch (alt_base) {
+                    case 'A':
+                        alt_count_fw = counts.A_fwd;
+                        alt_count_rv = counts.A_rev;
+                        break;
+                    case 'C':
+                        alt_count_fw = counts.C_fwd;
+                        alt_count_rv = counts.C_rev;
+                        break;
+                    case 'G':
+                        alt_count_fw = counts.G_fwd;
+                        alt_count_rv = counts.G_rev;
+                        break;
+                    case 'T':
+                        alt_count_fw = counts.T_fwd;
+                        alt_count_rv = counts.T_rev;
+                        break;
+                    case 'N':
+                        alt_count_fw = counts.N_fwd;
+                        alt_count_rv = counts.N_rev;
+                        break;
+                }
 
-            // Apply call_strand filter
-            if (call_strand == "forward")
-                pass_freq = (freq_fw >= min_freq);
-            else if (call_strand == "reverse")
-                pass_freq = (freq_rv >= min_freq);
+                int alt_count = alt_count_fw + alt_count_rv;
+                if (alt_count == 0)
+                    continue;
 
-            if (!pass_freq)
-                continue;
+                float freq = 0;
+                float freq_fw = 0;
+                float freq_rv = 0;
+                
+                if (total_count > 0)
+                    freq = static_cast<float>(alt_count) / total_count;
+                if (total_count_fw > 0)
+                    freq_fw = static_cast<float>(alt_count_fw) / total_count_fw;
+                if (total_count_rv > 0)
+                    freq_rv = static_cast<float>(alt_count_rv) / total_count_rv;
 
-            ofs << chrom << ';' << position << ';' << ref << ';' << alt_base << ';'
-                << total_count << ';' << freq << ';'
-                << alt_count_fw << ';' << freq_fw << ';'
-                << alt_count_rv << ';' << freq_rv << '\n';
+                bool pass_freq = (freq >= min_freq);
+
+                // Apply call_strand filter
+                if (call_strand == "forward")
+                    pass_freq = (freq_fw >= min_freq);
+                else if (call_strand == "reverse")
+                    pass_freq = (freq_rv >= min_freq);
+
+                if (!pass_freq)
+                    continue;
+
+                ofs << chrom_name << ';' << pos << ';' << ref << ';' << alt_base << ';'
+                    << total_count << ';' << freq << ';'
+                    << total_count_fw << ';' << freq_fw << ';'
+                    << total_count_rv << ';' << freq_rv << '\n';
+            }
         }
     }
 
     ofs.close();
 }
+
