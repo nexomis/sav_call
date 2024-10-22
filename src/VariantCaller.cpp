@@ -536,7 +536,7 @@ void VariantCaller::call_variants() {
 
                 int alt_count = alt_count_fw + alt_count_rv;
 
-                bool pass_count = (alt_count < min_alt_count);
+                bool pass_count = (alt_count >= min_alt_count);
 
                 if (call_strand == "forward")
                     pass_count = (alt_count_fw >= min_alt_count);
@@ -571,10 +571,10 @@ void VariantCaller::call_variants() {
                 ofs << chrom_name << ';' << pos << ';' << ref << ';' << alt_base << ';'
                     << total_count << ';' << freq << ';'
                     << total_count_fw << ';' << freq_fw << ';'
-                    << total_count_rv << ';' << freq_rv << '\n';
+                    << total_count_rv << ';' << freq_rv << std::endl;
             }
 
-            if (indel_counts_map.find(key) != indel_counts_map.end()){
+            if (indel_counts_map.find(key) != indel_counts_map.end()) {
                 const IndelCounts &indel_counts =  indel_counts_map[key];
                 for (const auto &indel_entry : indel_counts.fwd_counts) {
                     const std::string &alt = indel_entry.first;
@@ -582,7 +582,7 @@ void VariantCaller::call_variants() {
                     int alt_count_rv = indel_counts.rev_counts.count(alt) ? indel_counts.rev_counts.at(alt) : 0;
                     int alt_count = alt_count_fw + alt_count_rv;
 
-                    bool pass_count = (alt_count < min_alt_count);
+                    bool pass_count = (alt_count >= min_alt_count);
 
                     if (call_strand == "forward")
                         pass_count = (alt_count_fw >= min_alt_count);
