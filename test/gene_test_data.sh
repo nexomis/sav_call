@@ -19,5 +19,9 @@ for spl in P0 P1 P2 P3; do
     samtools index genvar/batch2/${spl}.bam
 done
 
-for sample in P0 P1 P2 P3; do
-    ../variant_caller --base_csv_file ${spl}.base.csv --indel_csv_file ${spl}.indel.csv --bam_input genvar/batch2/${spl}.abra2.bam --fasta_reference ref/refseq.fa --min_freq 0.2 --called_variants_file ${spl}.call.csv
+mv genvar/batch2 test_data
+rm -rf genvar
+
+for spl in P0 P1 P2 P3; do
+    ../variant_caller --base-csv ${spl}.base.csv --indel-csv ${spl}.indel.csv --bam test_data/${spl}.abra2.bam --reference ref/refseq.fa --min-freq 0.2 --called-variant-csv ${spl}.call.csv --count-read-extremities --call-strand forward
+done
