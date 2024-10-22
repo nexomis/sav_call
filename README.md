@@ -11,7 +11,7 @@ make
 ```
 Usage: variant_caller [options] --bam <input.bam> --reference <reference.fasta>
 Options:
-  --count-read-extremities             Count read extremities (default: false)
+  --keep-read-extremities              Keep read extremities (default: false)
   --keep-duplicate                     Keep duplicate reads (default: false)
   --keep-secondary                     Keep secondary mapping (default: false)
   --base-csv <file>                    Output base counts to CSV file
@@ -24,7 +24,7 @@ Options:
   --reference <reference.fasta>        Reference FASTA file (required)
   --min-freq <float>                   Minimum frequency to call a variant (default: 0.02)
   --call-strand <forward|reverse|both> Strand to apply thresholds (default: both)
-  --min-count <int>                    Minimum count to report in outputs (default: 20)
+  --min-count <int>                    Minimum counts to call a variant (default: 20)
   --min-alt-count <int>                Minimum alternative counts to call (default: 10)
   --maw-n-pileup <int>                 Maximum reads in pileup (default: 1000000)
 ```

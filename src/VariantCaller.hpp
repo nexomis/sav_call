@@ -18,7 +18,7 @@ public:
 
 private:
     // Options
-    bool count_read_extremities;
+    bool keep_read_extremities;
     std::string base_csv_file;
     std::string indel_csv_file;
     std::string called_variant_file;

@@ -7,7 +7,7 @@
 #include <cstring>
 
 VariantCaller::VariantCaller()
-    : count_read_extremities(false),
+    : keep_read_extremities(false),
       min_qual(0),
       is_r1_rev(false),
       is_r2_rev(true),
@@ -33,7 +33,7 @@ VariantCaller::~VariantCaller() {
 void VariantCaller::print_usage() {
     std::cout << "Usage: variant_caller [options] --bam <input.bam> --reference <reference.fasta>\n"
               << "Options:\n"
-              << "  --count-read-extremities             Count read extremities (default: false)\n"
+              << "  --keep-read-extremities              Keep read extremities (default: false)\n"
               << "  --keep-duplicate                     Keep duplicate reads (default: false)\n"
               << "  --keep-secondary                     Keep secondary mapping (default: false)\n"
               << "  --base-csv <file>                    Output base counts to CSV file\n"
@@ -46,14 +46,14 @@ void VariantCaller::print_usage() {
               << "  --reference <reference.fasta>        Reference FASTA file (required)\n"
               << "  --min-freq <float>                   Minimum frequency to call a variant (default: 0.02)\n"
               << "  --call-strand <forward|reverse|both> Strand to apply thresholds (default: both)\n"
-              << "  --min-count <int>                    Minimum count to report in outputs (default: 20)\n"
+              << "  --min-count <int>                    Minimum counts to call a variant (default: 20)\n"
               << "  --min-alt-count <int>                Minimum alternative counts to call (default: 10)\n"
-              << "  --maw-n-pileup <int>                 Maximum reads in pileup (default: 1000000)\n";
+              << "  --max-n-pileup <int>                 Maximum reads in pileup (default: 1000000)\n";
 }
 
 bool VariantCaller::parse_arguments(int argc, char **argv) {
     static struct option long_options[] = {
-        {"count-read-extremities", no_argument, 0, 0},
+        {"keep-read-extremities", no_argument, 0, 0},
         {"skip-duplicate", no_argument, 0, 0},
         {"skip-secondary", no_argument, 0, 0},
         {"base-csv", required_argument, 0, 0},
@@ -85,8 +85,8 @@ bool VariantCaller::parse_arguments(int argc, char **argv) {
             return false;
         }
         std::string opt_name = long_options[option_index].name;
-        if (opt_name == "count-read-extremities") {
-            count_read_extremities = true;
+        if (opt_name == "keep-read-extremities") {
+            keep_read_extremities = true;
         } else if (opt_name == "base-csv") {
             base_csv_file = optarg;
         } else if (opt_name == "indel-csv") {
@@ -244,8 +244,12 @@ void VariantCaller::update_counts(uint32_t tid, int pos, int n_plp, const bam_pi
         if (is_secondary(b) && skip_secondary)
             continue;
 
-        if ((p->is_head || p->is_tail) && (!count_read_extremities))
-            continue;
+        if (! keep_read_extremities){
+            if (p->is_head || p->is_tail){
+                continue;
+            }
+        }
+            
 
         // Get base quality
         uint8_t *q = bam_get_qual(b);
@@ -333,22 +337,6 @@ void VariantCaller::update_counts(uint32_t tid, int pos, int n_plp, const bam_pi
                 }
             }
 
-            // For reverse strand, reverse complement
-            if (!is_forward_strand) {
-                std::string revcomp_seq = "";
-                for (auto it = seq.rbegin(); it != seq.rend(); ++it) {
-                    char c = *it;
-                   switch (std::toupper(c)) {
-                        case 'A': revcomp_seq += 'T'; break;
-                        case 'C': revcomp_seq += 'G'; break;
-                        case 'G': revcomp_seq += 'C'; break;
-                        case 'T': revcomp_seq += 'A'; break;
-                        default: revcomp_seq += 'N';
-                    }
-                }
-                seq = revcomp_seq;
-            }
-
             if (indel_len > 0)
                 seq = "+" + seq;
             else
@@ -401,7 +389,7 @@ void VariantCaller::write_base_csv() {
     for (int tid = 0; tid < header->n_targets; ++tid) {
         const char* chrom_name = header->target_name[tid];
         int64_t chrom_length = header->target_len[tid];
-        for (int64_t pos = 0; pos < chrom_length; ++pos) {
+        for (int64_t pos = 1; pos <= chrom_length; ++pos) {
             const std::string key = std::string(chrom_name) + ":" + std::to_string(pos);
             const BaseCounts &counts = base_counts_map[key];
             int ref_len;
@@ -453,10 +441,8 @@ void VariantCaller::write_indel_csv() {
             int fwd_count = indel_entry.second;
             int rev_count = counts.rev_counts.count(alt) ? counts.rev_counts.at(alt) : 0;
 
-            if (fwd_count + rev_count >= min_count) {
-                ofs << chrom << ';' << position << ';' << ref << ';' << alt << ';'
-                    << fwd_count << ';' << rev_count << '\n';
-            }
+            ofs << chrom << ';' << position << ';' << ref << ';' << alt << ';'
+                << fwd_count << ';' << rev_count << '\n';
         }
     }
 
