@@ -1,4 +1,4 @@
-# SAV-CALL Stand-aware Variant caller
+# SAV-CALL Strand-aware Variant caller
 
 ## Build
 
@@ -9,7 +9,7 @@ make
 ## Use
 
 ```
-Usage: variant_caller [options] --bam <input.bam> --reference <reference.fasta>
+Usage: sav_call [options] --bam <input.bam> --reference <reference.fasta>
 Options:
   --keep-read-extremities              Keep read extremities (default: false)
   --keep-duplicate                     Keep duplicate reads (default: false)
