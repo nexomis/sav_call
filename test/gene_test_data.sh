@@ -25,11 +25,11 @@ if [ ! -d "test_data" ]; then
 fi
 
 for spl in P0 P1 P2 P3; do
-    ./sav_call --base-csv ${spl}.base.csv --indel-csv ${spl}.indel.csv --bam test_data/${spl}.abra2.bam --reference ref/refseq.fa --called-variant-csv ${spl}.call.csv --keep-read-extremities --call-strand forward
-    python check_results.py test_data/${spl}.indel.csv test_data/${spl}.snp.csv ${spl}.call.csv ref/refseq.fa 1> check_forward_${spl}.out 2> check_forward_${spl}.err
+    ./sav_call --base-csv ${spl}.base.csv --indel-csv ${spl}.indel.csv --bam test_data/${spl}.abra2.bam --reference ref/refseq.fa --prefix-out ${spl}.fr --keep-read-extremities
+    python check_results.py test_data/${spl}.indel.csv test_data/${spl}.snp.csv ${spl}.fr.fwd.csv ref/refseq.fa 1> check_forward_${spl}.out 2> check_forward_${spl}.err
 done
 
 for spl in P0 P1 P2 P3; do
-    ./sav_call --base-csv ${spl}.base.csv --indel-csv ${spl}.indel.csv --bam test_data/${spl}.abra2.bam --reference ref/refseq.fa --called-variant-csv ${spl}.call.csv --keep-read-extremities --R1-strand reverse --R2-strand forward --call-strand reverse
-    python check_results.py test_data/${spl}.indel.csv test_data/${spl}.snp.csv ${spl}.call.csv ref/refseq.fa 1> check_reverse_${spl}.out 2> check_reverse_${spl}.err
+    ./sav_call --base-csv ${spl}.base.csv --indel-csv ${spl}.indel.csv --bam test_data/${spl}.abra2.bam --reference ref/refseq.fa --prefix-out ${spl}.rf --R1-strand reverse --R2-strand forward
+    python check_results.py test_data/${spl}.indel.csv test_data/${spl}.snp.csv ${spl}.rf.rev.csv ref/refseq.fa 1> check_reverse_${spl}.out 2> check_reverse_${spl}.err
 done

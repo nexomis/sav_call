@@ -4,6 +4,7 @@
 
 #include <string>
 #include <map>
+#include <variant>
 #include <htslib/sam.h>
 #include <htslib/faidx.h>
 #include <htslib/hts.h>
@@ -12,6 +13,7 @@ class VariantCaller {
 public:
     VariantCaller();
     ~VariantCaller();
+    bool help;
     bool parse_arguments(int argc, char **argv);
     void print_usage();
     bool run();
@@ -21,7 +23,7 @@ private:
     bool keep_read_extremities;
     std::string base_csv_file;
     std::string indel_csv_file;
-    std::string called_variant_file;
+    std::string prefix_out;
     int min_qual;
     bool is_r1_rev;
     bool is_r2_rev;
@@ -72,6 +74,12 @@ private:
     void write_base_csv();
     void write_indel_csv();
     void call_variants();
+    void make_a_call(
+        const std::string& region, const int& pos,
+        int& total_count, int& total_count_fw, int& total_count_rv,
+        int& alt_count, int& alt_count_fw, int& alt_count_rv,
+        char& ref, const std::string& alt_base,
+        std::ofstream& both_ofs, std::ofstream& fwd_ofs, std::ofstream& rev_ofs);
 
 };
 

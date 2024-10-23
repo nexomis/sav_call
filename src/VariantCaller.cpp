@@ -7,7 +7,8 @@
 #include <cstring>
 
 VariantCaller::VariantCaller()
-    : keep_read_extremities(false),
+    : help(false),
+      keep_read_extremities(false),
       min_qual(0),
       is_r1_rev(false),
       is_r2_rev(true),
@@ -31,34 +32,55 @@ VariantCaller::~VariantCaller() {
 }
 
 void VariantCaller::print_usage() {
-    std::cout << "Usage: variant_caller [options] --bam <input.bam> --reference <reference.fasta>\n"
-              << "Options:\n"
-              << "  --keep-read-extremities              Keep read extremities (default: false)\n"
-              << "  --keep-duplicate                     Keep duplicate reads (default: false)\n"
-              << "  --keep-secondary                     Keep secondary mapping (default: false)\n"
-              << "  --base-csv <file>                    Output base counts to CSV file\n"
-              << "  --indel-csv <file>                   Output indel counts to CSV file\n"
-              << "  --called-variant-csv <file>          Output called variants to CSV file\n"
-              << "  --min-qual <int>                     Minimum base quality to count (default: 0)\n"
-              << "  --R1-strand <forward|reverse>        Set R1 strand (default: forward)\n"
-              << "  --R2-strand <forward|reverse>        Set R2 strand (default: reverse)\n"
-              << "  --bam <input.bam>                    Input BAM file (required)\n"
-              << "  --reference <reference.fasta>        Reference FASTA file (required)\n"
-              << "  --min-freq <float>                   Minimum frequency to call a variant (default: 0.02)\n"
-              << "  --call-strand <forward|reverse|both> Strand to apply thresholds (default: both)\n"
-              << "  --min-count <int>                    Minimum counts to call a variant (default: 20)\n"
-              << "  --min-alt-count <int>                Minimum alternative counts to call (default: 10)\n"
-              << "  --max-n-pileup <int>                 Maximum reads in pileup (default: 1000000)\n";
+    std::cout << "Usage: sav_call [options] --bam <input.bam> --reference <reference.fasta>       " << std::endl
+              << "                                                                                " << std::endl
+              << "  Version 0.1.0                                                                 " << std::endl
+              << "                                                                                " << std::endl
+              << "Required arguments:                                                             " << std::endl
+              << "  --prefix-out <string>                Prefix for output files with called      " << std::endl
+              << "                                         variants. 3 files for forward, reverse " << std::endl
+              << "                                         and both strands, respectively:        " << std::endl
+              << "                                         - fwd: <prefix>.fwd.csv                " << std::endl
+              << "                                         - rev: <prefix>.rev.csv                " << std::endl
+              << "                                         - both: <prefix>.both.csv              " << std::endl
+              << "  --bam <input.bam>                    Input BAM file                           " << std::endl
+              << "  --reference <reference.fasta>        Reference FASTA used for mapping         " << std::endl
+              << "                                                                                " << std::endl
+              << "Optional arguments:                                                             " << std::endl
+              << "  --base-csv <file>                    Base counts and depths for both forward  " << std::endl
+              << "                                         and reverse strand with all pileup     " << std::endl
+              << "                                         position to CSV file. Position without " << std::endl
+              << "                                         reads are not reported. Gaps in reads  " << std::endl
+              << "                                         are accounted in depths                " << std::endl
+              << "  --indel-csv <file>                   Output indel counts to CSV file          " << std::endl
+              << "  --keep-read-extremities              Keep read extremities (default: false)   " << std::endl
+              << "  --keep-duplicate                     Keep duplicate reads (default: false)    " << std::endl
+              << "  --keep-secondary                     Keep secondary mapping (default: false)  " << std::endl
+              << "  --min-qual <int>                     Minimum base quality to count            " << std::endl
+              << "                                         (default: 0)                           " << std::endl
+              << "  --R1-strand <forward|reverse>        Set R1 strand (default: forward)         " << std::endl
+              << "  --R2-strand <forward|reverse>        Set R2 strand (default: reverse)         " << std::endl
+              << "  --bam <input.bam>                    Input BAM file (required)                " << std::endl
+              << "  --reference <reference.fasta>        Reference FASTA file (required)          " << std::endl
+              << "  --min-freq <float>                   Minimum frequency to call a variant      " << std::endl
+              << "                                         (default: 0.02)                        " << std::endl
+              << "  --min-count <int>                    Minimum counts to call a variant         " << std::endl
+              << "                                         (default: 20)                          " << std::endl
+              << "  --min-alt-count <int>                Minimum alternative counts to call       " << std::endl
+              << "                                         (default: 10)                          " << std::endl
+              << "  --max-n-pileup <int>                 Maximum reads in pileup                  " << std::endl
+              << "                                         (default: 1000000)                     " << std::endl;
 }
 
 bool VariantCaller::parse_arguments(int argc, char **argv) {
     static struct option long_options[] = {
+        {"help", no_argument, 0, 0},
         {"keep-read-extremities", no_argument, 0, 0},
         {"skip-duplicate", no_argument, 0, 0},
         {"skip-secondary", no_argument, 0, 0},
         {"base-csv", required_argument, 0, 0},
         {"indel-csv", required_argument, 0, 0},
-        {"called-variant-csv", required_argument, 0, 0},
+        {"prefix-out", required_argument, 0, 0},
         {"min-qual", required_argument, 0, 0},
         {"R1-strand", required_argument, 0, 0},
         {"R2-strand", required_argument, 0, 0},
@@ -92,8 +114,8 @@ bool VariantCaller::parse_arguments(int argc, char **argv) {
             base_csv_file = optarg;
         } else if (opt_name == "indel-csv") {
             indel_csv_file = optarg;
-        } else if (opt_name == "called-variant-csv") {
-            called_variant_file = optarg;
+        } else if (opt_name == "prefix-out") {
+            prefix_out = optarg;
         } else if (opt_name == "min-qual") {
             min_qual = std::stoi(optarg);
         } else if (opt_name == "R1-strand") {
@@ -116,6 +138,8 @@ bool VariantCaller::parse_arguments(int argc, char **argv) {
             max_n_pileup = std::stoi(optarg);
         } else if (opt_name == "keep-secondary") {
             skip_secondary = false;
+        } else if (opt_name == "help") {
+            help = true;
         } else if (opt_name == "keep-duplicate") {
             skip_duplicate = false;
         } else {
@@ -124,7 +148,7 @@ bool VariantCaller::parse_arguments(int argc, char **argv) {
         }
     }
 
-    if (bam_input.empty() || fasta_reference.empty()) {
+    if ((bam_input.empty() || fasta_reference.empty()) && ! help) {
         std::cerr << "Error: BAM input and reference FASTA are required." << std::endl;
         return false;
     }
@@ -188,8 +212,7 @@ bool VariantCaller::run() {
         write_base_csv();
     if (!indel_csv_file.empty())
         write_indel_csv();
-    if (!called_variant_file.empty())
-        call_variants();
+    call_variants();
 
     return true;
 }
@@ -451,14 +474,23 @@ void VariantCaller::write_indel_csv() {
 }
 
 void VariantCaller::call_variants() {
-    std::ofstream ofs(called_variant_file);
-    if (!ofs) {
-        std::cerr << "Error opening called variant CSV file for writing: " << called_variant_file << std::endl;
+    std::string both_file = prefix_out + ".both.csv";
+    std::string rev_file = prefix_out + ".rev.csv";
+    std::string fwd_file = prefix_out + ".fwd.csv";
+
+    std::ofstream both_ofs(both_file);
+    std::ofstream rev_ofs(rev_file);
+    std::ofstream fwd_ofs(fwd_file);
+
+    if (!(both_ofs || rev_ofs || fwd_ofs)) {
+        std::cerr << "Error opening output file for writing: " << std::endl;
         return;
     }
 
     // Output header
-    ofs << "region;pos;ref;alt;depth;freq;depth_fw;freq_fw;depth_rv;freq_rv\n";
+    both_ofs << "region;pos;ref;alt;depth;freq" << std::endl;
+    rev_ofs << "region;pos;ref;alt;depth;freq" << std::endl;
+    fwd_ofs << "region;pos;ref;alt;depth;freq" << std::endl;
 
     for (int tid = 0; tid < header->n_targets; ++tid) {
         const char* chrom_name = header->target_name[tid];
@@ -474,21 +506,8 @@ void VariantCaller::call_variants() {
             if (ref_base) free(ref_base);
 
             int total_count_fw = counts.depth_fw;
-
             int total_count_rv = counts.depth_rv;
-
             int total_count = total_count_fw + total_count_rv;
-
-            if (call_strand == "forward") {
-                if (total_count_fw < min_count)
-                    continue;
-            } else if (call_strand == "reverse") {
-                if (total_count_rv < min_count)
-                    continue;
-            } else {
-                if (total_count < min_count)
-                    continue;
-            }
 
             // For each possible alt base
             char bases[] = {'A', 'C', 'G', 'T', 'N'};
@@ -523,94 +542,76 @@ void VariantCaller::call_variants() {
 
                 int alt_count = alt_count_fw + alt_count_rv;
 
-                bool pass_count = (alt_count >= min_alt_count);
+                std::string alt_str = "";
+                alt_str += alt_base;
 
-                if (call_strand == "forward")
-                    pass_count = (alt_count_fw >= min_alt_count);
-                else if (call_strand == "reverse")
-                    pass_count = (alt_count_rv >= min_alt_count);
+                make_a_call(chrom_name, pos,
+                            total_count, total_count_fw, total_count_rv,
+                            alt_count, alt_count_fw, alt_count_rv,
+                            ref, alt_str,
+                            both_ofs, fwd_ofs, rev_ofs); 
 
-                if (! pass_count)
-                    continue;
-
-                float freq = 0;
-                float freq_fw = 0;
-                float freq_rv = 0;
-                
-                if (total_count > 0)
-                    freq = static_cast<float>(alt_count) / total_count;
-                if (total_count_fw > 0)
-                    freq_fw = static_cast<float>(alt_count_fw) / total_count_fw;
-                if (total_count_rv > 0)
-                    freq_rv = static_cast<float>(alt_count_rv) / total_count_rv;
-
-                bool pass_freq = (freq >= min_freq);
-
-                // Apply call_strand filter
-                if (call_strand == "forward")
-                    pass_freq = (freq_fw >= min_freq);
-                else if (call_strand == "reverse")
-                    pass_freq = (freq_rv >= min_freq);
-
-                if (!pass_freq)
-                    continue;
-
-                ofs << chrom_name << ';' << pos << ';' << ref << ';' << alt_base << ';'
-                    << total_count << ';' << freq << ';'
-                    << total_count_fw << ';' << freq_fw << ';'
-                    << total_count_rv << ';' << freq_rv << std::endl;
             }
 
             if (indel_counts_map.find(key) != indel_counts_map.end()) {
                 const IndelCounts &indel_counts =  indel_counts_map[key];
                 for (const auto &indel_entry : indel_counts.fwd_counts) {
-                    const std::string &alt = indel_entry.first;
+                    const std::string &alt_base = indel_entry.first;
                     int alt_count_fw = indel_entry.second;
-                    int alt_count_rv = indel_counts.rev_counts.count(alt) ? indel_counts.rev_counts.at(alt) : 0;
+                    int alt_count_rv = indel_counts.rev_counts.count(alt_base) ? indel_counts.rev_counts.at(alt_base) : 0;
                     int alt_count = alt_count_fw + alt_count_rv;
 
-                    bool pass_count = (alt_count >= min_alt_count);
+                    make_a_call(chrom_name, pos,
+                                total_count, total_count_fw, total_count_rv,
+                                alt_count, alt_count_fw, alt_count_rv,
+                                ref, alt_base,
+                                both_ofs, fwd_ofs, rev_ofs);
 
-                    if (call_strand == "forward")
-                        pass_count = (alt_count_fw >= min_alt_count);
-                    else if (call_strand == "reverse")
-                        pass_count = (alt_count_rv >= min_alt_count);
-
-                    if (! pass_count)
-                        continue;
-
-                    float freq = 0;
-                    float freq_fw = 0;
-                    float freq_rv = 0;
-                    
-                    if (total_count > 0)
-                        freq = static_cast<float>(alt_count) / total_count;
-                    if (total_count_fw > 0)
-                        freq_fw = static_cast<float>(alt_count_fw) / total_count_fw;
-                    if (total_count_rv > 0)
-                        freq_rv = static_cast<float>(alt_count_rv) / total_count_rv;
-
-                    bool pass_freq = (freq >= min_freq);
-
-                    // Apply call_strand filter
-                    if (call_strand == "forward")
-                        pass_freq = (freq_fw >= min_freq);
-                    else if (call_strand == "reverse")
-                        pass_freq = (freq_rv >= min_freq);
-
-                    if (!pass_freq)
-                        continue;
-
-                    ofs << chrom_name << ';' << pos << ';' << ref << ';' << alt << ';'
-                    << total_count << ';' << freq << ';'
-                    << total_count_fw << ';' << freq_fw << ';'
-                    << total_count_rv << ';' << freq_rv << '\n';
                 }
             }
 
         }
     }
 
-    ofs.close();
+    both_ofs.close();
+    rev_ofs.close();
+    fwd_ofs.close();
+}
+
+void VariantCaller::make_a_call(
+    const std::string& region, const int& pos,
+    int& total_count, int& total_count_fw, int& total_count_rv,
+    int& alt_count, int& alt_count_fw, int& alt_count_rv,
+    char& ref, const std::string& alt_base,
+    std::ofstream& both_ofs, std::ofstream& fwd_ofs, std::ofstream& rev_ofs) {
+    
+    bool pass_count = (alt_count >= min_alt_count) && (total_count >= min_count);
+    bool pass_count_fw = (alt_count_fw >= min_alt_count) && (total_count_fw >= min_count);
+    bool pass_count_rv = (alt_count_rv >= min_alt_count) && (total_count_rv >= min_count);
+    float freq = 0;
+    float freq_fw = 0;
+    float freq_rv = 0;
+    if (total_count > 0)
+        freq = static_cast<float>(alt_count) / total_count;
+    if (total_count_fw > 0)
+        freq_fw = static_cast<float>(alt_count_fw) / total_count_fw;
+    if (total_count_rv > 0)
+        freq_rv = static_cast<float>(alt_count_rv) / total_count_rv;
+    bool pass_freq = (freq >= min_freq);
+    bool pass_freq_rv = (freq_rv >= min_freq);
+    bool pass_freq_fw = (freq_fw >= min_freq);
+
+    if (pass_freq && pass_count){
+        both_ofs << region << ';' << pos << ';' << ref << ';' << alt_base << ';'
+        << total_count << ';' << freq << std::endl;
+    }
+    if (pass_freq_rv && pass_count_rv){
+        rev_ofs << region << ';' << pos << ';' << ref << ';' << alt_base << ';'
+        << total_count_rv << ';' << freq_rv << std::endl;
+    }
+    if (pass_freq_fw && pass_count_fw){
+        fwd_ofs << region << ';' << pos << ';' << ref << ';' << alt_base << ';'
+        << total_count_fw << ';' << freq_fw << std::endl;
+    }
 }
 
