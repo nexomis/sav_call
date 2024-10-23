@@ -31,10 +31,6 @@ all: $(TARGET)
 $(BUILDDIR):
 	mkdir -p $(BUILDDIR)
 
-# Create build directory if it doesn't exist
-$(BUILDDIR):
-	mkdir -p $(BUILDDIR)
-
 # Build target
 $(TARGET): $(BUILDDIR) $(OBJECTS)
 	$(CXX) $(CXXFLAGS) -o $@ $(OBJECTS) $(LDFLAGS) $(LIBS)

@@ -29,10 +29,16 @@ private:
     bool is_r2_rev;
     std::string bam_input;
     std::string fasta_reference;
-    float min_freq;
+    float min_freq_fw;
+    float min_freq_rv;
+    float min_freq_both;
     std::string call_strand;
-    int min_count;
-    int min_alt_count;
+    int min_count_fw;
+    int min_count_rv;
+    int min_count_both;
+    int min_alt_count_fw;
+    int min_alt_count_rv;
+    int min_alt_count_both;
     bool skip_secondary;
     bool skip_duplicate;
     int max_n_pileup;
@@ -80,6 +86,19 @@ private:
         int& alt_count, int& alt_count_fw, int& alt_count_rv,
         char& ref, const std::string& alt_base,
         std::ofstream& both_ofs, std::ofstream& fwd_ofs, std::ofstream& rev_ofs);
+
+    void split_three(const std::string& input_str, 
+                               int& val1, 
+                               int& val2, 
+                               int& val3);
+    void split_three(const std::string& input_str,
+                               float& val1, 
+                               float& val2, 
+                               float& val3);
+    void split_three(const std::string& input_str, 
+                               std::string& val1, 
+                               std::string& val2, 
+                               std::string& val3);
 
 };
 

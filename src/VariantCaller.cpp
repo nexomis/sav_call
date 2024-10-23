@@ -12,10 +12,16 @@ VariantCaller::VariantCaller()
       min_qual(0),
       is_r1_rev(false),
       is_r2_rev(true),
-      min_freq(0.02),
+      min_freq_fw(0.02),
+      min_freq_rv(0.02),
+      min_freq_both(0.02),
       call_strand("both"),
-      min_count(20),
-      min_alt_count(10),
+      min_count_fw(20),
+      min_count_rv(20),
+      min_count_both(20),
+      min_alt_count_fw(10),
+      min_alt_count_rv(10),
+      min_alt_count_both(10),
       skip_secondary(true),
       skip_duplicate(true),
       max_n_pileup(1000000),
@@ -34,7 +40,7 @@ VariantCaller::~VariantCaller() {
 void VariantCaller::print_usage() {
     std::cout << "Usage: sav_call [options] --bam <input.bam> --reference <reference.fasta>       " << std::endl
               << "                                                                                " << std::endl
-              << "  Version 0.1.0                                                                 " << std::endl
+              << "  Version 0.2.0                                                                 " << std::endl
               << "                                                                                " << std::endl
               << "Required arguments:                                                             " << std::endl
               << "  --prefix-out <string>                Prefix for output files with called      " << std::endl
@@ -62,12 +68,15 @@ void VariantCaller::print_usage() {
               << "  --R2-strand <forward|reverse>        Set R2 strand (default: reverse)         " << std::endl
               << "  --bam <input.bam>                    Input BAM file (required)                " << std::endl
               << "  --reference <reference.fasta>        Reference FASTA file (required)          " << std::endl
-              << "  --min-freq <float>                   Minimum frequency to call a variant      " << std::endl
-              << "                                         (default: 0.02)                        " << std::endl
-              << "  --min-count <int>                    Minimum counts to call a variant         " << std::endl
-              << "                                         (default: 20)                          " << std::endl
-              << "  --min-alt-count <int>                Minimum alternative counts to call       " << std::endl
-              << "                                         (default: 10)                          " << std::endl
+              << "  --min-freq <float;float;float>       Minimum frequency to call a variant      " << std::endl
+              << "                                         (default: 0.02;0.02;0.02)              " << std::endl
+              << "                                         fwd;rev;both                           " << std::endl
+              << "  --min-count <int;int;int>              Minimum counts to call a variant       " << std::endl
+              << "                                         (default: 20;20;20)                    " << std::endl
+              << "                                         fwd;rev;both                           " << std::endl
+              << "  --min-alt-count <int;int;int>        Minimum alternative counts to call       " << std::endl
+              << "                                         (default: 10;10;10)                    " << std::endl
+              << "                                         fwd;rev;both                           " << std::endl
               << "  --max-n-pileup <int>                 Maximum reads in pileup                  " << std::endl
               << "                                         (default: 1000000)                     " << std::endl;
 }
@@ -127,13 +136,11 @@ bool VariantCaller::parse_arguments(int argc, char **argv) {
         } else if (opt_name == "reference") {
             fasta_reference = optarg;
         } else if (opt_name == "min-freq") {
-            min_freq = std::stof(optarg);
-        } else if (opt_name == "call-strand") {
-            call_strand = optarg;
+            split_three(optarg, min_freq_fw, min_freq_rv, min_freq_both);
         } else if (opt_name == "min-count") {
-            min_count = std::stoi(optarg);
+            split_three(optarg, min_count_fw, min_count_rv, min_count_both);
         } else if (opt_name == "min-alt-count") {
-            min_alt_count = std::stoi(optarg);
+            split_three(optarg, min_alt_count_fw, min_alt_count_rv, min_alt_count_both);
         } else if (opt_name == "max-n-pileup") {
             max_n_pileup = std::stoi(optarg);
         } else if (opt_name == "keep-secondary") {
@@ -585,9 +592,9 @@ void VariantCaller::make_a_call(
     char& ref, const std::string& alt_base,
     std::ofstream& both_ofs, std::ofstream& fwd_ofs, std::ofstream& rev_ofs) {
     
-    bool pass_count = (alt_count >= min_alt_count) && (total_count >= min_count);
-    bool pass_count_fw = (alt_count_fw >= min_alt_count) && (total_count_fw >= min_count);
-    bool pass_count_rv = (alt_count_rv >= min_alt_count) && (total_count_rv >= min_count);
+    bool pass_count = (alt_count >= min_alt_count_both) && (total_count >= min_count_both);
+    bool pass_count_fw = (alt_count_fw >= min_alt_count_fw) && (total_count_fw >= min_count_fw);
+    bool pass_count_rv = (alt_count_rv >= min_alt_count_rv) && (total_count_rv >= min_count_rv);
     float freq = 0;
     float freq_fw = 0;
     float freq_rv = 0;
@@ -597,9 +604,9 @@ void VariantCaller::make_a_call(
         freq_fw = static_cast<float>(alt_count_fw) / total_count_fw;
     if (total_count_rv > 0)
         freq_rv = static_cast<float>(alt_count_rv) / total_count_rv;
-    bool pass_freq = (freq >= min_freq);
-    bool pass_freq_rv = (freq_rv >= min_freq);
-    bool pass_freq_fw = (freq_fw >= min_freq);
+    bool pass_freq = (freq >= min_freq_both);
+    bool pass_freq_rv = (freq_rv >= min_freq_fw);
+    bool pass_freq_fw = (freq_fw >= min_freq_rv);
 
     if (pass_freq && pass_count){
         both_ofs << region << ';' << pos << ';' << ref << ';' << alt_base << ';'
@@ -615,3 +622,99 @@ void VariantCaller::make_a_call(
     }
 }
 
+void VariantCaller::split_three(const std::string& input_str, 
+                std::string& val1, 
+                std::string& val2, 
+                std::string& val3) 
+{
+    size_t pos1 = input_str.find(';');
+    if (pos1 == std::string::npos) {
+        throw std::invalid_argument("Input string does not contain enough delimiters.");
+    }
+
+    size_t pos2 = input_str.find(';', pos1 + 1);
+    if (pos2 == std::string::npos) {
+        throw std::invalid_argument("Input string does not contain enough delimiters.");
+    }
+
+    val1 = input_str.substr(0, pos1);
+    val2 = input_str.substr(pos1 + 1, pos2 - pos1 - 1);
+    val3 = input_str.substr(pos2 + 1);
+}
+
+
+void VariantCaller::split_three(const std::string& input_str, 
+                               int& val1, 
+                               int& val2, 
+                               int& val3) 
+{
+    std::string s1, s2, s3;
+
+    // Call the string-based split function
+    try {
+        split_three(input_str, s1, s2, s3);
+    }
+    catch (const std::invalid_argument& e) {
+        throw; // Re-throw the exception for the caller to handle
+    }
+
+    // Convert strings to ints
+    try {
+        val1 = std::stoi(s1);
+    }
+    catch (const std::exception& e) {
+        throw std::invalid_argument("Conversion to int failed for val1: " + s1);
+    }
+
+    try {
+        val2 = std::stoi(s2);
+    }
+    catch (const std::exception& e) {
+        throw std::invalid_argument("Conversion to int failed for val2: " + s2);
+    }
+
+    try {
+        val3 = std::stoi(s3);
+    }
+    catch (const std::exception& e) {
+        throw std::invalid_argument("Conversion to int failed for val3: " + s3);
+    }
+}
+
+void VariantCaller::split_three(const std::string& input_str, 
+                               float& val1, 
+                               float& val2, 
+                               float& val3) 
+{
+    std::string s1, s2, s3;
+
+    // Call the string-based split function
+    try {
+        split_three(input_str, s1, s2, s3);
+    }
+    catch (const std::invalid_argument& e) {
+        throw; // Re-throw the exception for the caller to handle
+    }
+
+    // Convert strings to floats
+    try {
+        val1 = std::stof(s1);
+    }
+    catch (const std::exception& e) {
+        throw std::invalid_argument("Conversion to float failed for val1: " + s1);
+    }
+
+    try {
+        val2 = std::stof(s2);
+    }
+    catch (const std::exception& e) {
+        throw std::invalid_argument("Conversion to float failed for val2: " + s2);
+    }
+
+    try {
+        val3 = std::stof(s3);
+    }
+    catch (const std::exception& e) {
+        throw std::invalid_argument("Conversion to float failed for val3: " + s3);
+    }
+}
