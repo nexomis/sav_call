@@ -68,6 +68,7 @@ bool VariantCaller::parse_arguments(int argc, char **argv) {
         {"call-strand", required_argument, 0, 0},
         {"min-count", required_argument, 0, 0},
         {"min-alt-count", required_argument, 0, 0},
+        {"max-n-pileup", required_argument, 0, 0},
         {0, 0, 0, 0}
     };
 

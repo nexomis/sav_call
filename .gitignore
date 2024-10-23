@@ -4,3 +4,9 @@
 /test/*csv
 /build
 /variant_caller
+/test/check*err
+/test/check*out
+/test/out
+/test/sav_call
+/test/coverage.info
+/sav_call

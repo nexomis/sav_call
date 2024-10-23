@@ -32,7 +32,16 @@ Options:
 ## Example / test
 
 ```
-cd test/
-bash gene_test_data.sh
+make test
+```
 
+Coverage report generated in 'test/out' directory.
+Check 'test/check*.err' and 'test/check*.err' to see results on sim data.
+
+## Code coverage
+
+```
+Overall coverage rate:
+  lines......: 87.0% (808 of 929 lines)
+  functions..: 95.2% (396 of 416 functions)
 ```
