@@ -68,3 +68,20 @@ Overall coverage rate:
   lines......: 79.0% (793 of 1004 lines)
   functions..: 94.5% (397 of 420 functions)
 ```
+
+## You can use the python script to run a batch analysis with annotation
+
+```
+python ../scripts/call.py \
+  --labels P0,P1,P2,P3 \
+  --strand both \
+  --min_alt_count 10 \
+  --min_count 20 \
+  --min_freq 0.03 \
+  --prot_attr gene \
+  --ref ref/refseq.fa \
+  --annot ref/refseq.gff \
+  --out test.python.call.csv \
+  --base_files P0.base.csv P1.base.csv P2.base.csv P3.base.csv \
+  --indel_files P0.indel.csv P1.indel.csv P2.indel.csv P3.indel.csv
+```

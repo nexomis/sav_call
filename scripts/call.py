@@ -9,6 +9,23 @@ from Bio.Seq import Seq
 from collections import defaultdict
 
 def parse_arguments():
+  """
+  Parse command line arguments for variant calling and annotation pipeline.
+  
+  Returns:
+      argparse.Namespace: Parsed command line arguments including:
+          - strand: Which DNA strand to consider
+          - min_alt_count: Minimum alternative base count threshold
+          - min_count: Minimum read depth threshold
+          - min_freq: Minimum variant frequency threshold
+          - ref: Reference FASTA file path
+          - annot: GFF annotation file path
+          - prot_attr: Protein name attribute in GFF
+          - labels: Sample labels
+          - out: Output file path
+          - base_files: Input base count files
+          - indel_files: Input indel files
+  """
   parser = argparse.ArgumentParser(description='Process CSV files to generate variant calls and annotations.')
   parser.add_argument('--strand', choices=['both', 'forward', 'reverse'], default='both', help='Strand to consider: both, forward, or reverse')
   parser.add_argument('--min_alt_count', type=int, default=1, help='Minimum number of counts to consider an alternative base for calling')
@@ -25,6 +42,34 @@ def parse_arguments():
   return parser.parse_args()
 
 def read_sample_csv(filename, sample_label, strand, min_count, min_alt_count, min_freq):
+  """
+  Read and process base count CSV files to identify variants.
+  
+  Args:
+      filename (str): Path to input CSV file
+      sample_label (str): Sample identifier
+      strand (str): Which strand to consider ('both', 'forward', or 'reverse')
+      min_count (int): Minimum read depth threshold
+      min_alt_count (int): Minimum alternative base count threshold
+      min_freq (float): Minimum variant frequency threshold
+  
+  Returns:
+      pandas.DataFrame: Processed variant calls with columns:
+          - region: Reference sequence identifier
+          - pos: Position in reference
+          - ref: Reference base
+          - alt: Alternative base
+          - D:{sample}: Depth at position
+          - F:{sample}: Variant frequency
+          - {sample}_called: Boolean indicating if variant passes thresholds
+  
+  Note:
+      Strategy for variant calling:
+      1. Loads base counts from CSV
+      2. Calculates depth based on specified strand
+      3. For each position, considers all possible alternative bases
+      4. Applies thresholds to determine called variants
+  """
   df = pd.read_csv(filename, sep=';', dtype={'region':str, 'pos':int, 'ref':str})
   
   # Determine depth and base counts based on the strand
@@ -88,6 +133,21 @@ def read_sample_csv(filename, sample_label, strand, min_count, min_alt_count, mi
   }))
 
 def read_indel_csv(filename, sample_label, depths, strand, min_count, min_alt_count, min_freq):
+  """
+  Read and process indel CSV files.
+  
+  Args:
+      filename (str): Path to indel CSV file
+      sample_label (str): Sample identifier
+      depths (dict): Pre-calculated depths per position
+      strand (str): Which strand to consider
+      min_count (int): Minimum read depth threshold
+      min_alt_count (int): Minimum alternative count threshold
+      min_freq (float): Minimum variant frequency threshold
+  
+  Returns:
+      pandas.DataFrame: Processed indel calls with depth and frequency information
+  """
   df = pd.read_csv(filename, sep=';', dtype={'region':str, 'pos':int, 'ref':str})
   d_col = f'D:{sample_label}'
   f_col = f'F:{sample_label}'
@@ -115,6 +175,22 @@ def read_indel_csv(filename, sample_label, depths, strand, min_count, min_alt_co
   return df
 
 def merge_samples(sample_dfs, labels):
+  """
+  Merge variant calls from multiple samples.
+  
+  Args:
+      sample_dfs (list): List of DataFrames containing variant calls
+      labels (list): Sample labels
+  
+  Returns:
+      pandas.DataFrame: Merged variant calls across all samples
+      
+  Note:
+      Strategy:
+      1. Performs outer merge on region, position, reference and alternative bases
+      2. Fills missing values appropriately
+      3. Keeps only variants called in at least one sample
+  """
   # Merge all sample DataFrames on region, pos, ref, alt
   from functools import reduce
 
@@ -135,12 +211,21 @@ def merge_samples(sample_dfs, labels):
   return merged_df
 
 def extract_attributes(attributes):
-      attr_dict = {}
-      for attr in attributes.split(';'):
-          if '=' in attr:
-              key, value = attr.split('=', 1)
-              attr_dict[key.strip()] = value.strip()
-      return attr_dict.get('ID', None), attr_dict.get('Parent', None)
+  """
+  Parse GFF attribute string into ID and Parent values.
+  
+  Args:
+      attributes (str): GFF9 format attribute string
+  
+  Returns:
+      tuple: (ID, Parent) extracted from attributes
+  """
+  attr_dict = {}
+  for attr in attributes.split(';'):
+    if '=' in attr:
+      key, value = attr.split('=', 1)
+      attr_dict[key.strip()] = value.strip()
+  return attr_dict.get('ID', None), attr_dict.get('Parent', None)
 
 def parse_gff_to_dataframe(gff_filename):
   # Read the GFF file into a DataFrame
@@ -158,10 +243,36 @@ def parse_gff_to_dataframe(gff_filename):
   return gff_df
 
 def build_cds_dict(gff_df, prot_attr, ref_sequences, flank_n):
+  """
+  Build a nested dictionary of CDS information from GFF annotations.
+  
+  Args:
+      gff_df (pandas.DataFrame): GFF annotation data
+      prot_attr (str): Attribute containing protein names
+      ref_sequences (dict): Reference sequences
+      flank_n (int): Number of flanking bases to include
+  
+  Returns:
+      dict: Nested dictionary with structure:
+          {sequence_id: {parent_id: {
+              'strand': strand,
+              'prot_name': protein_name,
+              'parts': [[start, end], ...],
+              'seq': concatenated_sequence
+          }}}
+  
+  Note:
+      Strategy:
+      1. Groups CDS features by parent
+      2. Validates strand consistency
+      3. Orders CDS parts by position considering strand
+      4. Concatenates sequences including flanking regions
+      5. Handles both forward and reverse strand features
+  """
   # Filter for CDS features
   cds_df = gff_df[gff_df['type'].str.lower() == 'cds']
 
-  # Group CDS by their Parent
+  # Initialize nested dictionary for CDS features
   cds_dict = defaultdict(lambda: defaultdict(lambda: {'strand': None, 'prot_name': "",'parts': [], 'seqs': [], 'seq': None}))
 
   for _, row in cds_df.iterrows():
@@ -171,21 +282,27 @@ def build_cds_dict(gff_df, prot_attr, ref_sequences, flank_n):
     start = row['start']
     end = row['end']
 
-    # Find the protein name by looking up the hierarchy
+    # POTENTIAL ISSUE: Complex hierarchical structures in GFF might lead to missing protein names
+    # Traverse up the parent hierarchy until we find the protein name
+    # This assumes the protein name will be found in an ancestor feature
     prot_name = None
     current_parent = parent
     while current_parent and not prot_name:
       parent_row = gff_df[gff_df['ID'] == current_parent]
       if not parent_row.empty:
+        # Extract protein name from attributes
+        # POTENTIAL ISSUE: Attribute parsing might fail if format is inconsistent
         prot_name = parent_row.iloc[0]['attributes'].split(f'{prot_attr}=')[-1].split(';')[0] if f'{prot_attr}=' in parent_row.iloc[0]['attributes'] else None
         current_parent = parent_row.iloc[0]['Parent']
       else:
         current_parent = None
 
+    # Store protein name if found
     if prot_name:
       cds_dict[seqid][parent]['prot_name'] = prot_name
 
-    # Ensure consistent strand information
+    # Validate strand consistency
+    # POTENTIAL ISSUE: Multi-exon genes on different strands would raise error
     if parent is None:
       raise ValueError(f"CDS feature at {seqid}:{start}-{end}{strand} has no parent")
     if cds_dict[seqid][parent]['strand'] is None:
@@ -193,14 +310,17 @@ def build_cds_dict(gff_df, prot_attr, ref_sequences, flank_n):
     elif cds_dict[seqid][parent]['strand'] != strand:
       raise ValueError(f"Inconsistent strand information at {seqid}:{start}-{end}{strand}")
 
-    # Add the CDS part
+    # Extract and store CDS sequence
+    # POTENTIAL ISSUE: Reference sequence might not match GFF coordinates
     cds_dict[seqid][parent]['parts'].append([start, end])
     cds_seq = ref_sequences[seqid].seq[(start - 1):end]
     if strand == "-":
       cds_seq = cds_seq.reverse_complement()
     cds_dict[seqid][parent]['seqs'].append(cds_seq)
 
-  # Sort parts based on strand
+  # Process each CDS to create complete sequences
+  # add Flanking sequence that extend beyond reference bounds to handle framshift
+  # or stop codon loss
   flank_seq = None
   for seqid in cds_dict:
     for parent in cds_dict[seqid]:
@@ -243,8 +363,33 @@ def build_cds_dict(gff_df, prot_attr, ref_sequences, flank_n):
   return cds_dict
 
 def annotate(row, cds_info, gff_id):
-
-  # extract the cds seq by iterating over parts
+  """
+  Annotate a single variant with protein-level information.
+  
+  Args:
+      row (pandas.Series): Variant information
+      cds_info (dict): CDS information including sequence and coordinates
+      gff_id (str): GFF feature identifier
+  
+  Returns:
+      dict: Annotation information including:
+          - Protein name
+          - Amino acid position
+          - Reference/alternative codons
+          - Reference/alternative amino acids
+          - Mutation type
+          - GFF ID
+  
+  Note:
+      Strategy:
+      1. Determines CDS position and codon context
+      2. Handles special cases (indels, frameshifts)
+      3. Translates reference and alternative sequences
+      4. Classifies mutation type
+      5. Special handling for stop codon loss
+  """
+  # Calculate CDS position by iterating through exons
+  # POTENTIAL ISSUE: Position calculation might be off for complex splice patterns
   cds_offset = 1
   cds_pos = None
   for part in cds_info['parts']:
@@ -260,35 +405,55 @@ def annotate(row, cds_info, gff_id):
     print(cds_info)
     raise ValueError("pos not found in CDS")
   
+  # Initialize variant type flags
   is_ins = False
   is_del = False
   is_fs = False
   indel_size = 0
 
-  # Determine codon position
+  # Calculate codon position (0-based)
   codon_start = ((cds_pos -1) // 3) * 3 # 0-based
   codon_pos = ((cds_pos -1) % 3) # 0-based
 
-  # Get the reference codon
+  # Extract reference codon sequence
   ref_codon_seq = []
   for i in range(3):
     ref_codon_seq.append(cds_info['seq'][codon_start + i])
   
+  # Create global value to handle frameshift in the global context
   pos2add = None
   
-  alt_codon_seq = ref_codon_seq.copy()
-  if row['alt'].startswith('+'):
+  # Handle different variant types (SNV, insertion, deletion)
+  alt_codon_seq = [l.lower() for l in ref_codon_seq]
+  indel_size = len(row['alt']) - 1
+  if row['alt'].startswith('+'): # Insertion
     is_ins = True
-    indel_size = len(row['alt']) - 1
-    alt_codon_seq.insert(codon_pos, row['alt'][1:])
+    alt_codon_seq.insert(codon_pos + 1, row['alt'][1:])
     pos2add = codon_start + 3
-  elif row['alt'].startswith('-'):
+  elif row['alt'].startswith('-'): # Deletion
     is_del = True
-    indel_size = len(row['alt']) - 1
-    alt_codon_seq = alt_codon_seq[:codon_pos] + alt_codon_seq[codon_pos + len(row['alt'][1:]):]
-  else:
+    # define the last deletion codon position (start of codon and codon context)
+    del_end_cds_pos = cds_pos + indel_size
+    del_end_codon_start = ((del_end_cds_pos -1) // 3) * 3 # 0-based
+    del_end_codon_pos = ((del_end_cds_pos -1) % 3) # 0-based
+    # ref_codon_seq may include more than 1 codon if span across codons 
+    ref_codon_seq = []
+    for i in range(codon_start, del_end_codon_start + 1, 3):
+      for j in range(3):
+        ref_codon_seq.append(cds_info['seq'][i + j])
+    # alt_codon shall not include deleted base
+    alt_codon_seq = []
+    for i in range(codon_start, del_end_codon_start + 1, 3):
+      for j in range(3):
+        pos2add = i + j
+        if (pos2add > codon_start + codon_pos) and (pos2add <= del_end_codon_start + del_end_codon_pos):
+          alt_codon_seq.append("-")
+        else:
+          alt_codon_seq.append(cds_info['seq'][pos2add])
+  else: # SNV
     alt_codon_seq[codon_pos] = row['alt']
 
+  # Check for frameshift
   if indel_size % 3 != 0:
     is_fs = True
 
@@ -296,33 +461,15 @@ def annotate(row, cds_info, gff_id):
   if not (is_del or is_ins):
     alt_codon_seq[codon_pos] = row['alt']
 
+  # switch from list to str for codon seqs
   alt_codon_seq = ''.join(alt_codon_seq)
   ref_codon_seq = ''.join(ref_codon_seq)
 
   # Get amino acids
   ref_aa = str(Seq(ref_codon_seq).translate())
-  aa_pos = int(1 + (codon_start / 3)) # 1-based
+  aa_pos = int(1 + (codon_start / 3)) # 1-based     
 
-  # In case of deletion ref_codon shall be built differently
-  if is_del:
-    del_end_cds_pos = cds_pos + indel_size
-    del_end_codon_start = ((del_end_cds_pos -1) // 3) * 3 # 0-based
-    del_end_codon_pos = ((del_end_cds_pos -1) % 3) # 0-based
-    ref_codon_seq = []
-    for i in range(codon_start, del_end_codon_start + 1, 3):
-      for j in range(3):
-        ref_codon_seq.append(cds_info['seq'][i + j])
-    alt_codon_seq = []
-    for i in range(codon_start, del_end_codon_start + 1, 3):
-      for j in range(3):
-        pos2add = i + j
-        if not ((pos2add > codon_start + codon_pos) and (pos2add <= del_end_codon_start + del_end_codon_pos)):
-          alt_codon_seq.append(cds_info['seq'][pos2add])
-
-    alt_codon_seq = ''.join(alt_codon_seq)
-    ref_codon_seq = ''.join(ref_codon_seq)
-    ref_aa = str(Seq(ref_codon_seq).translate())
-
+  # Handle frameshift consequences
   if is_fs:
     fs_alt_codon_seq = alt_codon_seq
     alt_aa = "?"
@@ -331,13 +478,14 @@ def annotate(row, cds_info, gff_id):
         break
       pos2add += 1
       fs_alt_codon_seq += str(cds_info['seq'][pos2add])
-      while len(fs_alt_codon_seq) % 3 != 0:
+      while len(fs_alt_codon_seq.replace('-','')) % 3 != 0:
         pos2add += 1
         fs_alt_codon_seq += str(cds_info['seq'][pos2add])
-      alt_aa = str(Seq(fs_alt_codon_seq).translate())
+      alt_aa = str(Seq(fs_alt_codon_seq.replace('-','')).translate())
   else:
-    alt_aa = str(Seq(alt_codon_seq).translate())
+    alt_aa = str(Seq(alt_codon_seq.replace('-','')).translate())
 
+  # Classify mutation type
   if is_fs:
     mut_type = "frameshift"
   else:
@@ -354,6 +502,7 @@ def annotate(row, cds_info, gff_id):
     else:
       mut_type = 'nonsynonymous'
 
+  # Handle stop loss specially
   if mut_type == "stop_lost":
     next_codon_start = codon_start + 3
     next_aa = ""
@@ -378,7 +527,21 @@ def annotate(row, cds_info, gff_id):
   }
 
 def annotate_variants(merged_df, ref_sequences, cds_dict):
-
+  """
+  Annotate all variants with protein-level information.
+  
+  Args:
+      merged_df (pandas.DataFrame): Merged variant calls
+      ref_sequences (dict): Reference sequences
+      cds_dict (dict): CDS information dictionary
+  
+  Returns:
+      pandas.DataFrame: Annotated variants with protein-level information
+      
+  Note:
+      Processes each variant to determine if it falls within a CDS
+      and adds appropriate annotation or marks as noncoding
+  """
   annotated_rows = []
 
   for _, row in merged_df.iterrows():
@@ -402,6 +565,17 @@ def annotate_variants(merged_df, ref_sequences, cds_dict):
   return annotated_df
 
 def main():
+  """
+  Main function orchestrating the variant calling and annotation pipeline.
+  
+  Workflow:
+  1. Parse command line arguments
+  2. Load reference sequences and annotations
+  3. Process base count and indel files for each sample
+  4. Merge variants across samples
+  5. Annotate variants with protein-level information
+  6. Output results to CSV
+  """
   args = parse_arguments()
 
   labels = args.labels.split(',')
