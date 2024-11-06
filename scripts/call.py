@@ -2,6 +2,7 @@
 
 import argparse
 import pandas as pd
+import numpy as np
 import sys
 from Bio import SeqIO
 from Bio.Seq import Seq
@@ -19,7 +20,8 @@ def parse_arguments():
   parser.add_argument('--labels', required=True, help='Comma-separated sample labels (e.g., spl1,spl2,spl3)')
   parser.add_argument('--out', required=True, help='Output CSV file')
   parser.add_argument('--flank_n', type=int, default = 99, help="Number of flanking base to extract at the end of CDS in case of stop codon loss or fs")
-  parser.add_argument('input_files', nargs='+', help='CSV files for each sample in the same order as labels')
+  parser.add_argument('--base_files', nargs='+', help='CSV files for each sample in the same order as labels')
+  parser.add_argument('--indel_files', nargs='+', help='Indel CSV files for each sample in the same order as labels')
   return parser.parse_args()
 
 def read_sample_csv(filename, sample_label, strand, min_count, min_alt_count, min_freq):
@@ -56,7 +58,7 @@ def read_sample_csv(filename, sample_label, strand, min_count, min_alt_count, mi
   df_depth = []
   df_freq = []
   df_called = []
-  for index, row in df.iterrows():
+  for _, row in df.iterrows():
     total_depth = row['depth_considered']
     ref_base = row['ref']
     for alt_base in ['A', 'T', 'C', 'G', 'N']:
@@ -85,6 +87,33 @@ def read_sample_csv(filename, sample_label, strand, min_count, min_alt_count, mi
       f'{sample_label}_called': df_called
   }))
 
+def read_indel_csv(filename, sample_label, depths, strand, min_count, min_alt_count, min_freq):
+  df = pd.read_csv(filename, sep=';', dtype={'region':str, 'pos':int, 'ref':str})
+  d_col = f'D:{sample_label}'
+  f_col = f'F:{sample_label}'
+  c_col = f'{sample_label}_called'
+  df[d_col] = 0
+  df[f_col] = 0
+  if strand == 'both':
+    df["alt_depth"] = df["forward"] + df["reverse"]
+  elif strand == 'reverse':
+    df["alt_depth"] = df["reverse"]
+  elif strand == 'forward':
+    df["alt_depth"] = df["forward"]
+  else: 
+    raise ValueError("Wrong strand args")
+  #This is not modifying the row in the df, how to do it ?
+  for index, row in df.iterrows():
+    df.loc[index, d_col] = depths[row["region"]][row["pos"] - 1]
+
+  df[f_col] = df["alt_depth"] / df[d_col]
+  df[c_col] = False
+  for index, row in df.iterrows():
+    if (row[f_col] > min_freq) and (row[d_col] > min_count) and (row['alt_depth'] > min_alt_count):
+      df.loc[index, c_col] = True
+  df.drop(columns=["forward","reverse","alt_depth"], inplace = True)
+  return df
+
 def merge_samples(sample_dfs, labels):
   # Merge all sample DataFrames on region, pos, ref, alt
   from functools import reduce
@@ -102,7 +131,7 @@ def merge_samples(sample_dfs, labels):
   called_columns = [f'{label}_called' for label in labels]
   merged_df['called_any'] = merged_df[called_columns].any(axis=1)
   merged_df = merged_df[merged_df['called_any']]
-  merged_df = merged_df.drop(columns=cols2drop)
+  merged_df.drop(columns=cols2drop, inplace = True)
   return merged_df
 
 def extract_attributes(attributes):
@@ -230,6 +259,11 @@ def annotate(row, cds_info, gff_id):
   if cds_pos is None:
     print(cds_info)
     raise ValueError("pos not found in CDS")
+  
+  is_ins = False
+  is_del = False
+  is_fs = False
+  indel_size = 0
 
   # Determine codon position
   codon_start = ((cds_pos -1) // 3) * 3 # 0-based
@@ -239,27 +273,92 @@ def annotate(row, cds_info, gff_id):
   ref_codon_seq = []
   for i in range(3):
     ref_codon_seq.append(cds_info['seq'][codon_start + i])
+  
+  pos2add = None
+  
+  alt_codon_seq = ref_codon_seq.copy()
+  if row['alt'].startswith('+'):
+    is_ins = True
+    indel_size = len(row['alt']) - 1
+    alt_codon_seq.insert(codon_pos, row['alt'][1:])
+    pos2add = codon_start + 3
+  elif row['alt'].startswith('-'):
+    is_del = True
+    indel_size = len(row['alt']) - 1
+    alt_codon_seq = alt_codon_seq[:codon_pos] + alt_codon_seq[codon_pos + len(row['alt'][1:]):]
+  else:
+    alt_codon_seq[codon_pos] = row['alt']
+
+  if indel_size % 3 != 0:
+    is_fs = True
 
   # Construct the alternative codon
-  alt_codon_seq = ref_codon_seq.copy()
-  alt_codon_seq[codon_pos] = row['alt']
+  if not (is_del or is_ins):
+    alt_codon_seq[codon_pos] = row['alt']
+
   alt_codon_seq = ''.join(alt_codon_seq)
   ref_codon_seq = ''.join(ref_codon_seq)
 
   # Get amino acids
   ref_aa = str(Seq(ref_codon_seq).translate())
-  alt_aa = str(Seq(alt_codon_seq).translate())
   aa_pos = int(1 + (codon_start / 3)) # 1-based
 
-  # Determine mutation type
-  if ref_aa == alt_aa:
-    mut_type = 'synonymous'
-  elif alt_aa == '*':
-    mut_type = 'nonsense'
-  elif ref_aa == '*':
-    mut_type = 'stop_lost'
+  # In case of deletion ref_codon shall be built differently
+  if is_del:
+    del_end_cds_pos = cds_pos + indel_size -1
+    del_end_codon_start = ((del_end_cds_pos -1) // 3) * 3 # 0-based
+    del_end_codon_pos = ((del_end_cds_pos -1) % 3) # 0-based
+    ref_codon_seq = []
+    for i in range(codon_start, del_end_codon_start + 1, 3):
+      for j in range(3):
+        print(cds_info['seq'][i + j])
+        ref_codon_seq.append(cds_info['seq'][i + j])
+    alt_codon_seq = []
+    pos2add = 0
+    for j in range(0,codon_pos + 1):
+      pos2add = codon_start + j
+      alt_codon_seq.append(cds_info['seq'][pos2add])
+    if del_end_codon_pos != 2:
+      for j in range(del_end_codon_pos + 1,3):
+        pos2add = del_end_codon_start + j
+        alt_codon_seq.append(cds_info['seq'][pos2add])
+    else:
+      pos2add = del_end_codon_pos + 2
+
+    alt_codon_seq = ''.join(alt_codon_seq)
+    ref_codon_seq = ''.join(ref_codon_seq)
+    ref_aa = str(Seq(ref_codon_seq).translate())
+
+  if is_fs:
+    fs_alt_codon_seq = alt_codon_seq
+    alt_aa = "?"
+    while not alt_aa.endswith("*"):
+      if pos2add + 3 > len(cds_info['seq']):
+        break
+      pos2add += 1
+      fs_alt_codon_seq += str(cds_info['seq'][pos2add])
+      while len(fs_alt_codon_seq) % 3 != 0:
+        pos2add += 1
+        fs_alt_codon_seq += str(cds_info['seq'][pos2add])
+      alt_aa = str(Seq(fs_alt_codon_seq).translate())
   else:
-    mut_type = 'nonsynonymous'
+    alt_aa = str(Seq(alt_codon_seq).translate())
+
+  if is_fs:
+    mut_type = "frameshift"
+  else:
+    if is_ins:
+      mut_type = "insertion"
+    elif is_del:
+      mut_type = "deletion" 
+    elif ref_aa == alt_aa:
+      mut_type = 'synonymous'
+    elif alt_aa == '*':
+      mut_type = 'nonsense'
+    elif ref_aa == '*':
+      mut_type = 'stop_lost'
+    else:
+      mut_type = 'nonsynonymous'
 
   if mut_type == "stop_lost":
     next_codon_start = codon_start + 3
@@ -312,7 +411,7 @@ def main():
   args = parse_arguments()
 
   labels = args.labels.split(',')
-  if len(labels) != len(args.input_files):
+  if len(labels) != len(args.base_files) or len(labels) != len(args.indel_files):
     sys.exit('The number of labels does not match the number of input files.')
 
   # Read the reference sequence
@@ -323,18 +422,34 @@ def main():
   cds_dict = build_cds_dict(gff_df, args.prot_attr, ref_sequences, args.flank_n)
 
   sample_dfs = []
-  for filename, label in zip(args.input_files, labels):
-    df_sample = read_sample_csv(filename, label, args.strand, args.min_count, args.min_alt_count, args.min_freq)
-    # Rename columns to include sample label
-    df_sample = df_sample.rename(columns={
-      'depth': f'D:{label}',
-      'freq': f'F:{label}',
-      'called': f'{label}_called'
-    })
+  indel_dfs = []
+  all_depths = dict()
+  for base_file, indel_file, label in zip(args.base_files, args.indel_files ,labels):
+    all_depths[label] = dict()
+    for region,record in ref_sequences.items():
+      all_depths[label][region] = np.zeros(len(record.seq),dtype= np.uint32)
+    df_sample = read_sample_csv(base_file, label, args.strand, args.min_count, args.min_alt_count, args.min_freq)
+    for _, row in df_sample.iterrows():
+      all_depths[label][row["region"]][row["pos"] - 1] = row[f'D:{label}']
+    df_indel = read_indel_csv(indel_file, label, all_depths[label], args.strand, args.min_count, args.min_alt_count, args.min_freq)
     sample_dfs.append(df_sample)
+    indel_dfs.append(df_indel)
 
   merged_df = merge_samples(sample_dfs, labels)
-  annotated_df = annotate_variants(merged_df, ref_sequences, cds_dict)
+  merged_indels = merge_samples(indel_dfs, labels)
+  for index, row in merged_indels.iterrows():
+    for label in labels:
+      d_col = f'D:{label}'
+      if pd.isnull(row[d_col]):
+        merged_indels.loc[index, d_col] = all_depths[label][row["region"]][row["pos"] - 1]
+        merged_indels.loc[index, f'F:{label}'] = 0
+
+  combined_df = pd.concat([merged_df, merged_indels])
+  sorted_df = combined_df.sort_values(by=['region', 'pos'], ascending=[True, True])
+  # Reset index if needed
+  sorted_df = sorted_df.reset_index(drop=True)
+
+  annotated_df = annotate_variants(sorted_df, ref_sequences, cds_dict)
   cols = ["region","pos","ref","alt","prot_name","aa_pos","ref_codon","alt_codon","ref_aa","alt_aa","mut_type"]
   for label in labels:
     cols.append(f'F:{label}')
