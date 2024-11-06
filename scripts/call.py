@@ -305,25 +305,19 @@ def annotate(row, cds_info, gff_id):
 
   # In case of deletion ref_codon shall be built differently
   if is_del:
-    del_end_cds_pos = cds_pos + indel_size -1
+    del_end_cds_pos = cds_pos + indel_size
     del_end_codon_start = ((del_end_cds_pos -1) // 3) * 3 # 0-based
     del_end_codon_pos = ((del_end_cds_pos -1) % 3) # 0-based
     ref_codon_seq = []
     for i in range(codon_start, del_end_codon_start + 1, 3):
       for j in range(3):
-        print(cds_info['seq'][i + j])
         ref_codon_seq.append(cds_info['seq'][i + j])
     alt_codon_seq = []
-    pos2add = 0
-    for j in range(0,codon_pos + 1):
-      pos2add = codon_start + j
-      alt_codon_seq.append(cds_info['seq'][pos2add])
-    if del_end_codon_pos != 2:
-      for j in range(del_end_codon_pos + 1,3):
-        pos2add = del_end_codon_start + j
-        alt_codon_seq.append(cds_info['seq'][pos2add])
-    else:
-      pos2add = del_end_codon_pos + 2
+    for i in range(codon_start, del_end_codon_start + 1, 3):
+      for j in range(3):
+        pos2add = i + j
+        if not ((pos2add > codon_start + codon_pos) and (pos2add <= del_end_codon_start + del_end_codon_pos)):
+          alt_codon_seq.append(cds_info['seq'][pos2add])
 
     alt_codon_seq = ''.join(alt_codon_seq)
     ref_codon_seq = ''.join(ref_codon_seq)
