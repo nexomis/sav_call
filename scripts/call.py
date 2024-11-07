@@ -31,12 +31,13 @@ def parse_arguments():
   parser.add_argument('--min_alt_count', type=int, default=1, help='Minimum number of counts to consider an alternative base for calling')
   parser.add_argument('--min_count', type=int, default=1, help='Minimum number of reads to consider a position for calling')
   parser.add_argument('--min_freq', type=float, default=0.0, help='Minimum frequency to call an alternative base')
+  parser.add_argument('--min_freq_indel', type=float, default=-1.0, help='Minimum frequency to call an indel (default =min_freq)')
   parser.add_argument('--ref', required=True, help='Reference FASTA file')
   parser.add_argument('--annot', required=True, help='GFF annotation file')
   parser.add_argument('--prot_attr', default='ID', help='Attribute with protein name in the GFF')
   parser.add_argument('--labels', required=True, help='Comma-separated sample labels (e.g., spl1,spl2,spl3)')
   parser.add_argument('--out', required=True, help='Output CSV file')
-  parser.add_argument('--flank_n', type=int, default = 99, help="Number of flanking base to extract at the end of CDS in case of stop codon loss or fs")
+  parser.add_argument('--flank_n', type=int, default = 999, help="Number of flanking base to extract at the end of CDS in case of stop codon loss or fs")
   parser.add_argument('--base_files', nargs='+', help='CSV files for each sample in the same order as labels')
   parser.add_argument('--indel_files', nargs='+', help='Indel CSV files for each sample in the same order as labels')
   return parser.parse_args()
@@ -224,18 +225,22 @@ def extract_attributes(attributes):
   for attr in attributes.split(';'):
     if '=' in attr:
       key, value = attr.split('=', 1)
+      value = value.split(" ")[0]
       attr_dict[key.strip()] = value.strip()
   return attr_dict.get('ID', None), attr_dict.get('Parent', None)
 
 def parse_gff_to_dataframe(gff_filename):
   # Read the GFF file into a DataFrame
+  # How to ignore any additional columns (more than 9) and ensure the first column is reads and not used as index
   gff_df = pd.read_csv(
       gff_filename,
       sep='\t',
       comment='#',
+      usecols=range(9),
       header=None,
       names=['seqid', 'source', 'type', 'start', 'end', 'score', 'strand', 'phase', 'attributes'],
-      dtype={'seqid': str, 'source': str, 'type': str, 'start': int, 'end': int, 'score': str, 'strand': str, 'phase': str, 'attributes': str}
+      dtype={'seqid': str, 'source': str, 'type': str, 'start': int, 'end': int, 'score': str, 'strand': str, 'phase': str, 'attributes': str},
+      index_col=False
   )  
 
   gff_df[['ID', 'Parent']] = gff_df['attributes'].apply(lambda x: pd.Series(extract_attributes(x)))
@@ -287,6 +292,7 @@ def build_cds_dict(gff_df, prot_attr, ref_sequences, flank_n):
     # This assumes the protein name will be found in an ancestor feature
     prot_name = None
     current_parent = parent
+    prot_name = row['attributes'].split(f'{prot_attr}=')[-1].split(';')[0] if f'{prot_attr}=' in row['attributes'] else None
     while current_parent and not prot_name:
       parent_row = gff_df[gff_df['ID'] == current_parent]
       if not parent_row.empty:
@@ -299,7 +305,7 @@ def build_cds_dict(gff_df, prot_attr, ref_sequences, flank_n):
 
     # Store protein name if found
     if prot_name:
-      cds_dict[seqid][parent]['prot_name'] = prot_name
+      cds_dict[seqid][parent]['prot_name'] = prot_name.split(" ")[0]
 
     # Validate strand consistency
     # POTENTIAL ISSUE: Multi-exon genes on different strands would raise error
@@ -402,7 +408,6 @@ def annotate(row, cds_info, gff_id):
       cds_offset += 1 + part[1] - part[0]
 
   if cds_pos is None:
-    print(cds_info)
     raise ValueError("pos not found in CDS")
   
   # Initialize variant type flags
@@ -505,14 +510,12 @@ def annotate(row, cds_info, gff_id):
   # Handle stop loss specially
   if mut_type == "stop_lost":
     next_codon_start = codon_start + 3
-    next_aa = ""
-    while next_codon_start + 2 < len(cds_info['seq']) and next_aa != "*":
+    while next_codon_start + 2 < len(cds_info['seq']) and (not alt_aa.endswith("*")):
       next_codon = []
       for i in range(3):
         next_codon.append(cds_info['seq'][next_codon_start + i])
-      next_codon = "".join(next_codon)
-      next_aa = str(Seq(next_codon).translate())
-      alt_aa += next_aa
+      alt_aa += str(Seq("".join(next_codon)).translate())
+      next_codon_start += 3
 
   # Return the annotated row
   return {
@@ -589,6 +592,10 @@ def main():
   gff_df = parse_gff_to_dataframe(args.annot)
   cds_dict = build_cds_dict(gff_df, args.prot_attr, ref_sequences, args.flank_n)
 
+  min_freq_indel = args.min_freq
+  if (args.min_freq_indel > 0):
+    min_freq_indel = args.min_freq_indel
+
   sample_dfs = []
   indel_dfs = []
   all_depths = dict()
@@ -599,7 +606,7 @@ def main():
     df_sample = read_sample_csv(base_file, label, args.strand, args.min_count, args.min_alt_count, args.min_freq)
     for _, row in df_sample.iterrows():
       all_depths[label][row["region"]][row["pos"] - 1] = row[f'D:{label}']
-    df_indel = read_indel_csv(indel_file, label, all_depths[label], args.strand, args.min_count, args.min_alt_count, args.min_freq)
+    df_indel = read_indel_csv(indel_file, label, all_depths[label], args.strand, args.min_count, args.min_alt_count, min_freq_indel)
     sample_dfs.append(df_sample)
     indel_dfs.append(df_indel)
 
@@ -624,6 +631,7 @@ def main():
   for label in labels:
     cols.append(f'D:{label}')
   cols.append('gff_id')
+
   annotated_df.to_csv(args.out, columns=cols, index=False, sep=';', float_format='%.4f')
 
 if __name__ == '__main__':
