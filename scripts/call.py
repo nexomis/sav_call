@@ -37,6 +37,7 @@ def parse_arguments():
   parser.add_argument('--prot_attr', default='ID', help='Attribute with protein name in the GFF')
   parser.add_argument('--labels', required=True, help='Comma-separated sample labels (e.g., spl1,spl2,spl3)')
   parser.add_argument('--out', required=True, help='Output CSV file')
+  parser.add_argument('--vcf', required=False, help='Output VCF file')
   parser.add_argument('--flank_n', type=int, default = 999, help="Number of flanking base to extract at the end of CDS in case of stop codon loss or fs")
   parser.add_argument('--base_files', nargs='+', help='CSV files for each sample in the same order as labels')
   parser.add_argument('--indel_files', nargs='+', help='Indel CSV files for each sample in the same order as labels')
@@ -567,6 +568,98 @@ def annotate_variants(merged_df, ref_sequences, cds_dict):
   annotated_df = pd.DataFrame(annotated_rows)
   return annotated_df
 
+def write_vcf(annotated_df, output_file, reference_id, labels, source="sav_call"):
+  """
+  Write variants to VCF format.
+  
+  Args:
+      annotated_df (pandas.DataFrame): Annotated variants DataFrame
+      output_file (str): Path to output VCF file
+      reference_id (str): Reference sequence identifier
+      labels (list): Sample labels
+      source (str): Source program name
+  
+  Note:
+      Handles special cases:
+      - Multiple annotations per variant (overlapping features)
+      - Indels (+ and - prefixes in alt field)
+      - Missing values
+  """
+  from datetime import datetime
+  
+  # Open output file
+  with open(output_file, 'w') as f:
+    # Write header
+    f.write("##fileformat=VCFv4.2\n")
+    f.write(f"##fileDate={datetime.now().strftime('%Y%m%d')}\n")
+    f.write(f"##source={source}\n")
+    f.write(f"##reference={reference_id}\n")
+    
+    # Write INFO and FORMAT definitions
+    f.write(
+      '##INFO=<ID=ANN,Number=A,Type=String,Description="Annotation per ALT allele: '
+      "'Prot_Name|AA_pos|AA_ref|AA_alt|CODON_ref|CODON_alt|GFF_ID' "
+      'Multiple features within same ALT separated by semicolon">\n')
+    f.write('##FORMAT=<ID=FQ,Number=A,Type=Float,Description="Frequency of each alternative allele">\n')
+    f.write('##FORMAT=<ID=DP,Number=1,Type=Integer,Description="Total read depth at position (ref + all alt)">\n')
+    
+    # Write column headers
+    columns = ['#CHROM', 'POS', 'ID', 'REF', 'ALT', 'QUAL', 'FILTER', 'INFO', 'FORMAT'] + labels
+    f.write('\t'.join(columns) + '\n')
+    
+    # Group variants by position to handle multiple annotations
+    grouped = annotated_df.groupby(['region', 'pos', 'ref', 'alt'])
+    
+    # Process each variant
+    for (region, pos, ref, alt), group in grouped:
+      # Skip non-coding variants if they don't have protein annotation
+      if group['mut_type'].iloc[0] == 'noncoding' and group['prot_name'].iloc[0] == '':
+        continue
+          
+      # Handle indels
+      vcf_alt = alt
+      if alt.startswith('+'):  # insertion
+        vcf_alt = ref + alt[1:]
+      elif alt.startswith('-'):  # deletion
+        vcf_ref = ref + alt[1:]
+        vcf_alt = ref
+        ref = vcf_ref
+        alt = vcf_alt
+      
+      # Build annotation string
+      ann_parts = []
+      for _, row in group.iterrows():
+        if row['prot_name']:  # Only include if there's protein annotation
+          ann = f"{row['prot_name']}|{row['aa_pos']}|{row['ref_aa']}|{row['alt_aa']}|{row['ref_codon']}|{row['alt_codon']}|{row['gff_id']}"
+          ann_parts.append(ann)
+      
+      info = f"ANN={';'.join(ann_parts)}" if ann_parts else "."
+      
+      # Format genotype fields
+      format_str = "FQ:DP"
+      sample_fields = []
+      for label in labels:
+        freq = group[f'F:{label}'].iloc[0]
+        depth = group[f'D:{label}'].iloc[0]
+        if pd.isna(freq):
+          freq = 0.0
+        sample_fields.append(f"{freq:.4f}:{int(depth)}")
+      
+      # Write variant line
+      fields = [
+          region,                  # CHROM
+        str(pos),                  # POS
+        ".",                       # ID
+        ref,                       # REF
+        vcf_alt,                   # ALT
+        ".",                       # QUAL
+        "PASS",                    # FILTER
+        info,                      # INFO
+        format_str                 # FORMAT
+      ] + sample_fields            # Sample columns
+      
+      f.write('\t'.join(fields) + '\n')
+
 def main():
   """
   Main function orchestrating the variant calling and annotation pipeline.
@@ -633,6 +726,8 @@ def main():
   cols.append('gff_id')
 
   annotated_df.to_csv(args.out, columns=cols, index=False, sep=';', float_format='%.4f')
+  if args.vcf:
+    write_vcf(annotated_df, args.vcf, args.ref, labels)
 
 if __name__ == '__main__':
   main()
