@@ -37,6 +37,7 @@ def parse_arguments():
   parser.add_argument('--prot_attr', default='ID', help='Attribute with protein name in the GFF')
   parser.add_argument('--labels', required=True, help='Comma-separated sample labels (e.g., spl1,spl2,spl3)')
   parser.add_argument('--out', required=True, help='Output CSV file')
+  parser.add_argument('--out_prot', required=False, help='Output FASTA file for proteins')
   parser.add_argument('--vcf', required=False, help='Output VCF file')
   parser.add_argument('--flank_n', type=int, default = 999, help="Number of flanking base to extract at the end of CDS in case of stop codon loss or fs")
   parser.add_argument('--base_files', nargs='+', help='CSV files for each sample in the same order as labels')
@@ -107,7 +108,7 @@ def read_sample_csv(filename, sample_label, strand, min_count, min_alt_count, mi
   df_called = []
   for _, row in df.iterrows():
     total_depth = row['depth_considered']
-    ref_base = row['ref']
+    ref_base = row['ref'].upper()
     for alt_base in ['A', 'T', 'C', 'G', 'N']:
       if alt_base != ref_base:
         alt_count = row[alt_base + '_count']
@@ -167,6 +168,7 @@ def read_indel_csv(filename, sample_label, depths, strand, min_count, min_alt_co
   #This is not modifying the row in the df, how to do it ?
   for index, row in df.iterrows():
     df.loc[index, d_col] = depths[row["region"]][row["pos"] - 1]
+    df.loc[index, "ref"] = row["ref"].upper()
 
   df[f_col] = df["alt_depth"] / df[d_col]
   df[c_col] = False
@@ -248,7 +250,7 @@ def parse_gff_to_dataframe(gff_filename):
 
   return gff_df
 
-def build_cds_dict(gff_df, prot_attr, ref_sequences, flank_n):
+def build_cds_dict(gff_df, prot_attr, ref_sequences, flank_n, prot_filename = None):
   """
   Build a nested dictionary of CDS information from GFF annotations.
   
@@ -257,6 +259,7 @@ def build_cds_dict(gff_df, prot_attr, ref_sequences, flank_n):
       prot_attr (str): Attribute containing protein names
       ref_sequences (dict): Reference sequences
       flank_n (int): Number of flanking bases to include
+      prot_filename (str): Path to write proteins
   
   Returns:
       dict: Nested dictionary with structure:
@@ -275,6 +278,11 @@ def build_cds_dict(gff_df, prot_attr, ref_sequences, flank_n):
       4. Concatenates sequences including flanking regions
       5. Handles both forward and reverse strand features
   """
+
+  if prot_filename:
+    with open(prot_filename, 'w') as f:
+      pass
+
   # Filter for CDS features
   cds_df = gff_df[gff_df['type'].str.lower() == 'cds']
 
@@ -320,7 +328,7 @@ def build_cds_dict(gff_df, prot_attr, ref_sequences, flank_n):
     # Extract and store CDS sequence
     # POTENTIAL ISSUE: Reference sequence might not match GFF coordinates
     cds_dict[seqid][parent]['parts'].append([start, end])
-    cds_seq = ref_sequences[seqid].seq[(start - 1):end]
+    cds_seq = ref_sequences[seqid].seq[(start - 1):end].upper()
     if strand == "-":
       cds_seq = cds_seq.reverse_complement()
     cds_dict[seqid][parent]['seqs'].append(cds_seq)
@@ -340,7 +348,7 @@ def build_cds_dict(gff_df, prot_attr, ref_sequences, flank_n):
         )
         flank_start = 1 + max(part[1] for part in cds_dict[seqid][parent]['parts'])
         flank_end = min(flank_start + flank_n - 1, len(ref_sequences[seqid]))
-        flank_seq = ref_sequences[seqid].seq[(flank_start - 1):flank_end]
+        flank_seq = ref_sequences[seqid].seq[(flank_start - 1):flank_end].upper()
       else:
         cds_dict[seqid][parent]['parts'], cds_dict[seqid][parent]['seqs'] = zip(
           *sorted(
@@ -351,7 +359,21 @@ def build_cds_dict(gff_df, prot_attr, ref_sequences, flank_n):
         )
         flank_end = min(part[0] for part in cds_dict[seqid][parent]['parts']) - 1
         flank_start = max(1, flank_end - flank_n + 1)
-        flank_seq = ref_sequences[seqid].seq[(flank_start - 1):flank_end].reverse_complement()
+        flank_seq = ref_sequences[seqid].seq[(flank_start - 1):flank_end].reverse_complement().upper()
+      if prot_filename:
+        prot_seq = None
+        for seq in cds_dict[seqid][parent]['seqs']:
+          if prot_seq is None:
+            prot_seq = seq
+          else:
+            prot_seq += seq
+        print(cds_dict[seqid][parent]['prot_name'])
+        prot_seq = prot_seq.translate()
+        with open(prot_filename, 'a') as f:
+          fasta_id = cds_dict[seqid][parent]['prot_name']
+          f.write(f'>{fasta_id}\n')
+          for i in range(0, len(prot_seq), 60):
+            f.write(str(prot_seq[i:i+60]) + '\n')
       for seq in cds_dict[seqid][parent]['seqs']:
         if cds_dict[seqid][parent]['seq'] is None:
           cds_dict[seqid][parent]['seq'] = seq
@@ -530,7 +552,7 @@ def annotate(row, cds_info, gff_id):
     'gff_id': gff_id
   }
 
-def annotate_variants(merged_df, ref_sequences, cds_dict):
+def annotate_variants(merged_df, cds_dict):
   """
   Annotate all variants with protein-level information.
   
@@ -683,7 +705,7 @@ def main():
 
   # Read GFF annotation file
   gff_df = parse_gff_to_dataframe(args.annot)
-  cds_dict = build_cds_dict(gff_df, args.prot_attr, ref_sequences, args.flank_n)
+  cds_dict = build_cds_dict(gff_df, args.prot_attr, ref_sequences, args.flank_n, args.out_prot)
 
   min_freq_indel = args.min_freq
   if (args.min_freq_indel > 0):
@@ -717,7 +739,7 @@ def main():
   # Reset index if needed
   sorted_df = sorted_df.reset_index(drop=True)
 
-  annotated_df = annotate_variants(sorted_df, ref_sequences, cds_dict)
+  annotated_df = annotate_variants(sorted_df, cds_dict)
   cols = ["region","pos","ref","alt","prot_name","aa_pos","ref_codon","alt_codon","ref_aa","alt_aa","mut_type"]
   for label in labels:
     cols.append(f'F:{label}')
