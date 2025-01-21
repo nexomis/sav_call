@@ -24,7 +24,13 @@ RUN export DEBIAN_FRONTEND=noninteractive \
     libstdc++6 \
     libc6 \
     libhts3 \
+    gzip \
+    python3-biopython \
+    python3-pandas \
+    python3-numpy \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the built executable from the build stage
 COPY --from=build /app/sav_call /usr/local/bin/sav_call
+
+COPY --chmod=755 scripts/call.py /usr/local/bin/call.py
